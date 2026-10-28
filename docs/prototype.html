@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas · 对话画布原型</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --bg2:#0f141b;
+    --line:#202a37;
+    --ink:#e6edf3;
+    --muted:#8b98a9;
+    --accent:#6ea8fe;
+    --green:#7ee787;
+    --amber:#f2cc60;
+    --paper:#fbf9f4;
+    --paper2:#f3efe6;
+    --paper-ink:#1d232b;
+    --paper-muted:#6b7280;
+    --paper-line:#e3ddd0;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit}
+  ::selection{background:rgba(110,168,254,.28)}
+
+  /* ---------- canvas ---------- */
+  #canvas{position:fixed;inset:0;overflow:hidden;cursor:grab;z-index:1;background:
+    radial-gradient(900px 600px at 18% 12%, rgba(110,168,254,.07), transparent 60%),
+    radial-gradient(900px 700px at 82% 82%, rgba(126,231,135,.045), transparent 60%),
+    var(--bg);}
+  #canvas.panning{cursor:grabbing}
+  #grid{position:absolute;inset:0;pointer-events:none;
+    background-image:radial-gradient(circle, rgba(255,255,255,.075) 1px, transparent 1px);
+    background-size:26px 26px;background-position:0 0;}
+  #vignette{position:absolute;inset:0;pointer-events:none;z-index:3;
+    background:radial-gradient(120% 90% at 50% 42%, transparent 52%, rgba(0,0,0,.45));}
+  #world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;z-index:2}
+  #edges{position:absolute;left:-4000px;top:-4000px;overflow:visible;pointer-events:none;z-index:1}
+  #edges path{fill:none;stroke:#2a3748;stroke-width:1.4}
+  #edges path.active{stroke:#3f6a9e}
+
+  /* ---------- nodes ---------- */
+  #nodes{position:absolute;left:0;top:0;z-index:2}
+  .node{
+    position:absolute;width:280px;height:92px;padding:13px 16px;
+    border-radius:14px;border:1px solid #243041;
+    background:linear-gradient(180deg,#151d27,#101720);
+    box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.035);
+    cursor:pointer;user-select:none;
+    transition:border-color .18s, box-shadow .18s, transform .18s, background .18s;
+  }
+  .node:hover{border-color:#3a4b63;transform:translateY(-2px);box-shadow:0 16px 38px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05)}
+  .node.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 18px 44px rgba(110,168,254,.16)}
+  .node .kind{position:absolute;top:12px;right:14px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#6f7f93}
+  .node .title{font-size:16px;font-weight:650;letter-spacing:-.01em;color:#e9f0f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:58px}
+  .node .title::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:2px;background:#3d4b5e}
+  .node.done .title::before{background:var(--green)}
+  .node.active .title::before{background:var(--accent);animation:pulse 2.6s infinite}
+  .node.seed .title::before{background:#48566a}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(110,168,254,.45)}50%{box-shadow:0 0 0 5px rgba(110,168,254,0)}}
+  .node .sub{margin-top:5px;font-size:12px;color:#8b98a9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta{position:absolute;left:16px;right:16px;bottom:11px;display:flex;align-items:center;gap:9px;font-size:10.5px;color:#758396}
+  .mastery{display:inline-flex;gap:3px;align-items:center}
+  .mastery i{width:5px;height:5px;border-radius:50%;background:#2b3849;display:block}
+  .mastery i.on{background:#8fb7ff}
+
+  /* semantic zoom */
+  #world.far .node .sub,
+  #world.far .node .meta,
+  #world.far .node .kind{opacity:0}
+  #world.far .node{display:flex;align-items:center;padding-top:0;background:rgba(18,25,35,.9)}
+  #world.far .node .title{font-size:17px;padding-right:0;width:100%}
+
+  /* ---------- top bar ---------- */
+  #topbar{
+    position:fixed;top:0;left:0;right:0;height:66px;z-index:30;
+    display:flex;align-items:center;gap:18px;padding:0 20px;
+    background:linear-gradient(180deg, rgba(9,12,17,.94), rgba(9,12,17,.6) 62%, transparent);
+    pointer-events:none;
+  }
+  #topbar > *{pointer-events:auto}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:24px;height:24px;border-radius:8px;background:conic-gradient(from 210deg,#6ea8fe,#7ee787,#f2cc60,#6ea8fe);
+    box-shadow:inset 0 0 0 6px #0b0f14, 0 0 0 1px rgba(255,255,255,.08)}
+  .brand-name{font-size:14px;font-weight:700;letter-spacing:.01em}
+  .brand-tag{font-size:11px;color:#6f7f93;border:1px solid #263241;border-radius:999px;padding:3px 8px}
+  .topcrumb{margin-left:14px;display:flex;align-items:center;gap:8px;font-size:12px;color:#7c8a9c}
+  .topcrumb i{font-style:normal;color:#3d4b5e}
+  .topcrumb b{color:#b9c6d6;font-weight:500}
+  .top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .btn{height:34px;padding:0 12px;border-radius:9px;border:1px solid #263241;background:rgba(20,27,37,.72);
+    color:#c8d4e3;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+    transition:background .15s,border-color .15s}
+  .btn:hover{background:#1a2330;border-color:#3a4b63}
+  .btn.ghost{background:transparent}
+
+  /* ---------- zoom / legend / hint ---------- */
+  #zoomctl{position:fixed;left:18px;bottom:18px;z-index:20;display:flex;align-items:center;gap:2px;padding:5px;
+    border:1px solid #263241;background:rgba(17,23,32,.82);backdrop-filter:blur(10px);border-radius:11px}
+  #zoomctl button{width:28px;height:28px;border:0;background:none;color:#a9b7c8;border-radius:7px;cursor:pointer;font-size:15px;line-height:1}
+  #zoomctl button:hover{background:#212c3a;color:#fff}
+  #zoomlabel{min-width:46px;text-align:center;font-size:11.5px;color:#8b98a9;font-variant-numeric:tabular-nums}
+  #legend{position:fixed;right:18px;bottom:20px;z-index:20;display:flex;gap:14px;font-size:11px;color:#7c8a9c}
+  #legend span{display:inline-flex;align-items:center;gap:6px}
+  #legend i{width:6px;height:6px;border-radius:50%;display:block}
+  #legend i.done{background:var(--green)}
+  #legend i.active{background:var(--accent)}
+  #legend i.seed{background:#4a586c}
+  #hint{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:20;
+    font-size:11.5px;color:#7c8a9c;background:rgba(17,23,32,.72);border:1px solid #202a37;border-radius:999px;
+    padding:7px 14px;backdrop-filter:blur(8px);transition:opacity .6s}
+  #hint.fade{opacity:0}
+
+  /* ---------- sheet ---------- */
+  #scrim{position:fixed;inset:0;z-index:40;background:rgba(4,7,10,.46);backdrop-filter:blur(5px);
+    opacity:0;pointer-events:none;transition:opacity .25s}
+  #scrim.show{opacity:1;pointer-events:auto}
+  #sheet{position:fixed;inset:0;z-index:50;display:grid;place-items:center;pointer-events:none}
+  #sheet .card{
+    position:relative;width:min(980px,calc(100vw - 76px));height:min(760px,calc(100vh - 76px));
+    background:var(--paper);color:var(--paper-ink);border-radius:20px;overflow:hidden;
+    box-shadow:0 50px 140px rgba(0,0,0,.62), 0 0 0 1px rgba(255,255,255,.06);
+    display:flex;flex-direction:column;
+    visibility:hidden;transform:translateY(10px) scale(.965);
+    transition:transform .28s cubic-bezier(.22,.8,.3,1);
+  }
+  #sheet.open .card{visibility:visible;transform:none;pointer-events:auto}
+
+  .sheet-head{padding:18px 22px 14px;border-bottom:1px solid var(--paper-line);display:flex;align-items:flex-start;gap:16px}
+  .sheet-head .crumb{font-size:11.5px;color:var(--paper-muted);display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .sheet-head .crumb i{font-style:normal;color:#c3bbaa}
+  .sheet-head h2{margin:0;font-size:21px;letter-spacing:-.015em;line-height:1.2;color:#161b22}
+  .sheet-head .subline{margin-top:5px;font-size:12px;color:var(--paper-muted);display:flex;align-items:center;gap:8px}
+  .pill{display:inline-flex;align-items:center;gap:5px;border:1px solid #d9d2c3;border-radius:999px;padding:2px 8px;font-size:10.5px;color:#6b7280;background:#fff}
+  .pill.green{border-color:#bfe3cb;background:#f1fbf4;color:#2f7d4a}
+  .head-actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .field{display:flex;align-items:center;gap:7px;height:34px;padding:0 10px;border:1px solid #ded6c7;border-radius:9px;background:#fff;color:#6b7280}
+  .field input{border:0;outline:0;background:none;font-size:12.5px;width:152px;color:#20262e}
+  .field input::placeholder{color:#9aa2ae}
+  .count{font-size:10.5px;color:#9aa2ae;white-space:nowrap}
+  .pbtn{height:34px;padding:0 12px;border-radius:9px;border:1px solid #ded6c7;background:#fff;color:#3b4452;
+    font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:.15s}
+  .pbtn:hover{border-color:#c8bfad;background:#fdfcf9}
+  .pbtn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .pbtn.primary:hover{background:#1a5fcc}
+  .pbtn.close{width:34px;justify-content:center;font-size:17px;color:#8a94a3;padding:0}
+
+  .sheet-main{flex:1;display:grid;grid-template-columns:198px 1fr;grid-template-rows:minmax(0,1fr);min-height:0}
+  .outline{border-right:1px solid var(--paper-line);background:var(--paper2);padding:14px 10px 20px;overflow:auto;min-height:0}
+  .outline-head{display:flex;align-items:center;justify-content:space-between;padding:0 8px 8px;font-size:10px;
+    letter-spacing:.1em;text-transform:uppercase;color:#8a8272}
+  .outline-head div{display:flex;gap:2px}
+  .outline-head button{border:0;background:none;color:#8a8272;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:5px}
+  .outline-head button:hover{background:#e7e0d2;color:#3b4452}
+  #outlineList a{display:block;text-decoration:none;font-size:12.5px;color:#4a5361;padding:6px 8px;border-radius:7px;
+    line-height:1.35;margin-bottom:1px;border-left:2px solid transparent}
+  #outlineList a:hover{background:#e9e3d5;color:#20262e}
+  #outlineList a.lvl3{padding-left:20px;font-size:12px;color:#6b7280}
+  #outlineList a.top{font-weight:600;color:#20262e}
+
+  .chat{overflow:auto;padding:24px 36px 168px;min-height:0}
+  .chat::-webkit-scrollbar{width:9px}
+  .chat::-webkit-scrollbar-thumb{background:#ddd5c6;border-radius:9px;border:2px solid var(--paper)}
+  .chat::-webkit-scrollbar-track{background:transparent}
+
+  .msg{margin:0 0 16px}
+  .msg .who{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9aa2ae;margin-bottom:5px}
+  .msg.user{display:flex;flex-direction:column;align-items:flex-end}
+  .msg.user .bubble{max-width:78%;background:#eaf2ff;border:1px solid #d6e4fa;color:#1c2b3f;
+    padding:10px 13px;border-radius:12px 12px 4px 12px;font-size:13.5px;line-height:1.6}
+  .msg.ai .md{font-size:13.8px;line-height:1.72;color:#252b34}
+  .msg.ai .md p{margin:0 0 9px}
+  .msg.ai .md ul,.msg.ai .md ol{margin:4px 0 10px;padding-left:20px}
+  .msg.ai .md li{margin:3px 0}
+  .msg.ai .md code{background:#efe9dc;border:1px solid #e3dbc9;border-radius:5px;padding:1px 5px;font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .msg.ai .md strong{color:#11161d}
+  .msg.ai .md .muted{color:#7a8390;font-size:12.5px}
+
+  .sec{margin:26px 0 0;border-top:1px solid var(--paper-line);padding-top:2px}
+  .sec:first-of-type{border-top:0}
+  .sec-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:9px 0 8px;
+    cursor:pointer;text-align:left;color:#1b212a}
+  .sec-head:hover .sec-title{color:#1f6feb}
+  .chev{display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+    border-top:5px solid #8a94a3;font-size:0;line-height:0;vertical-align:middle;transition:transform .2s;transform-origin:50% 45%}
+  .sec.closed .chev{transform:rotate(-90deg)}
+  .sec-title{font-size:15.5px;font-weight:700;letter-spacing:-.01em;line-height:1.35}
+  .sec.lvl3 .sec-title{font-size:14px}
+  .sec.lvl3{margin-left:16px;border-top:1px dashed #e6dfd0}
+  .sec-meta{margin-left:auto;font-size:10.5px;color:#9aa2ae;white-space:nowrap;padding-left:10px}
+  .sec-body{display:grid;grid-template-rows:1fr;transition:grid-template-rows .26s ease}
+  .sec.closed .sec-body{grid-template-rows:0fr}
+  .sec-body > .sec-inner{overflow:hidden;min-height:0}
+  .sec-pad{padding:12px 0 8px}
+  .sec.filtered-out{display:none}
+  .sec.search-hit .sec-head{background:#fff8e6;border-radius:8px;margin-left:-8px;padding-left:8px;padding-right:8px}
+
+  .subchat{margin:14px 0 6px 18px;border-left:2px dashed #cfd8e6;padding-left:16px}
+  .sub-head{display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 0 6px;user-select:none}
+  .sub-head:hover .sub-title{color:#1f6feb}
+  .sub-title{font-size:13px;font-weight:650;color:#334155}
+  .sub-meta{font-size:10px;color:#9aa2ae}
+  .sub-actions{margin-left:auto;display:flex;gap:6px}
+  .promote{border:1px solid #d9d2c3;background:#fff;color:#6b7280;font-size:10px;padding:3px 7px;border-radius:999px;cursor:pointer}
+  .promote:hover{border-color:#b9cdf0;color:#1f6feb;background:#f7faff}
+  .sub-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .24s ease}
+  .subchat.open .sub-body{grid-template-rows:1fr}
+  .sub-body > .sub-inner{overflow:hidden;min-height:0}
+  .sub-pad{padding:8px 0 4px}
+  .subchat .msg .md{font-size:13px;background:#f6f8fc;border:1px solid #e6ebf4;border-radius:10px;padding:10px 12px}
+  .subchat .msg .md p:last-child{margin-bottom:0}
+
+  .closure{margin:22px 0;border:1px solid #cfe8d6;background:#f4fbf6;border-radius:14px;padding:15px 17px}
+  .closure-top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .closure-badge{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#2f7d4a;background:#e3f5e9;border-radius:999px;padding:2px 8px}
+  .closure-time{font-size:10px;color:#9aa2ae}
+  .closure h4{margin:0 0 7px;font-size:14px;color:#1c3325}
+  .closure ul{margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;color:#3c4a42}
+  .closure-foot{margin-top:9px;font-size:10.5px;color:#6b7280;display:flex;gap:14px}
+
+  .composer{position:absolute;left:0;right:0;bottom:0;padding:14px 22px 18px;z-index:5;
+    background:linear-gradient(to top, var(--paper) 58%, rgba(251,249,244,0))}
+  .composer .box{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #ded6c7;border-radius:14px;
+    padding:8px 8px 8px 13px;box-shadow:0 8px 24px rgba(31,38,48,.08)}
+  .composer input{flex:1;border:0;outline:0;background:none;font-size:13.5px;color:#20262e;padding:6px 0}
+  .composer input::placeholder{color:#a2a9b4}
+  .composer .send{width:32px;height:32px;border-radius:9px;border:0;background:#1f6feb;color:#fff;cursor:pointer;font-size:15px}
+  .composer .send:hover{background:#1a5fcc}
+  .composer .tip{font-size:10px;color:#a2a9b4;margin:7px 2px 0;display:flex;gap:10px}
+
+  #toast{position:fixed;left:50%;bottom:30px;z-index:80;transform:translateX(-50%) translateY(8px);
+    background:#1b2430;color:#dbe7f5;border:1px solid #2c3b4e;padding:9px 15px;border-radius:999px;
+    font-size:12px;opacity:0;pointer-events:none;transition:.24s;box-shadow:0 12px 30px rgba(0,0,0,.4)}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:900px){
+    .sheet-main{grid-template-columns:1fr}
+    .outline{display:none}
+    #sheet .card{width:calc(100vw - 28px);height:calc(100vh - 28px)}
+    .topcrumb{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition-duration:.01ms !important;animation-duration:.01ms !important}
+  }
+  body.no-anim *{transition:none !important;animation:none !important}
+</style>
+</head>
+<body>
+
+<div id="canvas">
+  <div id="grid"></div>
+  <div id="world">
+    <svg id="edges" width="8000" height="8000" viewBox="-4000 -4000 8000 8000"></svg>
+    <div id="nodes"></div>
+  </div>
+  <div id="vignette"></div>
+</div>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="mark"></span>
+    <span class="brand-name">Atlas</span>
+    <span class="brand-tag">对话画布 · 原型</span>
+  </div>
+  <div class="topcrumb"><span>数据库系统</span><i>/</i><span>学习地图</span><i>/</i><b>8 个模块</b></div>
+  <div class="top-actions">
+    <button class="btn ghost" id="tidyBtn" title="恢复自动布局">整理</button>
+    <button class="btn ghost" id="fitBtn" title="适配窗口（F）">适配</button>
+    <button class="btn ghost" id="helpBtn" title="快捷键">?</button>
+  </div>
+</header>
+
+<div id="zoomctl">
+  <button id="zout" title="缩小">−</button>
+  <span id="zoomlabel">100%</span>
+  <button id="zin" title="放大">+</button>
+  <button id="zfit" title="适配窗口">⤢</button>
+</div>
+
+<div id="legend">
+  <span><i class="done"></i>已收口</span>
+  <span><i class="active"></i>进行中</span>
+  <span><i class="seed"></i>未开始</span>
+</div>
+
+<div id="hint">滚轮缩放 · 拖拽平移 / 移动节点 · 点击节点进入对话</div>
+
+<div id="scrim"></div>
+
+<section id="sheet" aria-hidden="true" aria-label="节点对话">
+  <div class="card" role="dialog" aria-modal="true">
+    <header class="sheet-head">
+      <div style="min-width:0">
+        <div class="crumb" id="crumb"></div>
+        <h2 id="sheetTitle">节点</h2>
+        <div class="subline" id="sheetSubline"></div>
+      </div>
+      <div class="head-actions">
+        <label class="field" title="搜索标题与内容">
+          <span style="font-size:12px">⌕</span>
+          <input id="search" type="search" placeholder="搜索内容…" autocomplete="off">
+          <span class="count" id="searchCount"></span>
+        </label>
+        <button class="pbtn" id="locateBtn" title="回到画布并定位">定位</button>
+        <button class="pbtn primary" id="closeNodeBtn" title="生成收口卡并关闭">收口</button>
+        <button class="pbtn close" id="closeSheetBtn" title="关闭（Esc）">×</button>
+      </div>
+    </header>
+
+    <div class="sheet-main">
+      <nav class="outline" aria-label="本节目录">
+        <div class="outline-head">
+          <span>本节目录</span>
+          <div>
+            <button id="collapseAll" title="折叠全部">⊟</button>
+            <button id="expandAll" title="展开全部">⊞</button>
+          </div>
+        </div>
+        <div id="outlineList"></div>
+      </nav>
+      <main class="chat" id="chatScroll"></main>
+    </div>
+
+    <footer class="composer">
+      <div class="box">
+        <input id="input" type="text" placeholder="继续追问这个节点…（原型不会真的调用模型）" autocomplete="off">
+        <button class="send" id="send" title="发送（Enter）">↑</button>
+      </div>
+      <div class="tip"><span>Enter 发送</span><span>Esc 关闭</span><span>标题可折叠，像 Word 的标题一样</span></div>
+    </footer>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============ data ============ */
+  var NODE_W = 280, NODE_H = 92;
+
+  var BASE = [
+    {id:'root', parent:null, x:0, y:0, title:'数据库系统', sub:'8 个模块 · 复习中', kind:'总览', status:'active', mastery:3, meta:'8 个节点'},
+    {id:'m1', parent:'root', x:380, y:-360, title:'01 存储引擎', sub:'页 · 缓冲池 · 堆文件', kind:'模块', status:'done', mastery:4, meta:'9 轮'},
+    {id:'m2', parent:'root', x:380, y:-260, title:'02 索引', sub:'B+ 树 · LSM · 哈希', kind:'模块', status:'active', mastery:3, meta:'12 轮'},
+    {id:'m3', parent:'root', x:380, y:-160, title:'03 查询处理', sub:'解析 · 优化 · 执行', kind:'模块', status:'seed', mastery:0, meta:'未开始'},
+    {id:'m4', parent:'root', x:380, y:-60, title:'04 事务与并发', sub:'ACID · MVCC · 隔离级别', kind:'模块', status:'done', mastery:4, meta:'15 轮'},
+    {id:'m5', parent:'root', x:380, y:40, title:'05 日志与恢复', sub:'WAL · ARIES', kind:'模块', status:'done', mastery:4, meta:'11 轮'},
+    {id:'m6', parent:'root', x:380, y:140, title:'06 分布式', sub:'复制 · 分片 · 一致性', kind:'模块', status:'seed', mastery:1, meta:'2 轮'},
+    {id:'m7', parent:'root', x:380, y:240, title:'07 SQL 与接口', sub:'解析器 · 执行器 · 协议', kind:'模块', status:'seed', mastery:0, meta:'未开始'},
+    {id:'m8', parent:'root', x:380, y:340, title:'08 性能与调优', sub:'慢查询 · 索引选择 · 缓存', kind:'模块', status:'seed', mastery:0, meta:'未开始'},
+
+    {id:'bplus', parent:'m2', x:760, y:-320, title:'B+ 树', sub:'页分裂 · 聚簇索引', kind:'知识点', status:'active', mastery:3, meta:'正在复习'},
+    {id:'lsm', parent:'m2', x:760, y:-220, title:'LSM 树', sub:'写放大 · Compaction', kind:'知识点', status:'seed', mastery:1, meta:'2 轮'},
+    {id:'hash', parent:'m2', x:760, y:-120, title:'哈希索引', sub:'等值查询 · 不支持范围', kind:'知识点', status:'seed', mastery:0, meta:'未开始'},
+    {id:'mvcc', parent:'m4', x:760, y:-60, title:'MVCC', sub:'版本链 · Read View', kind:'知识点', status:'done', mastery:4, meta:'6 轮'},
+    {id:'iso', parent:'m4', x:760, y:40, title:'隔离级别', sub:'RU · RC · RR · Serializable', kind:'知识点', status:'done', mastery:3, meta:'5 轮'},
+    {id:'wal', parent:'m5', x:760, y:140, title:'WAL', sub:'先写日志 · redo / undo', kind:'知识点', status:'done', mastery:4, meta:'7 轮'},
+    {id:'aries', parent:'m5', x:760, y:240, title:'ARIES', sub:'分析 · 重做 · 撤销', kind:'知识点', status:'seed', mastery:2, meta:'3 轮'},
+    {id:'repl', parent:'m6', x:760, y:240, title:'复制', sub:'主从 · 一致性', kind:'知识点', status:'seed', mastery:1, meta:'1 轮'},
+    {id:'shard', parent:'m6', x:760, y:340, title:'分片', sub:'范围 · 哈希 · 一致性哈希', kind:'知识点', status:'seed', mastery:0, meta:'未开始'},
+    {id:'split', parent:'bplus', x:1140, y:-350, title:'页分裂', sub:'写放大 · 分裂策略', kind:'概念', status:'done', mastery:4, meta:'3 轮'},
+    {id:'cluster', parent:'bplus', x:1140, y:-250, title:'聚簇索引', sub:'回表 · 覆盖索引', kind:'概念', status:'done', mastery:3, meta:'4 轮'}
+  ];
+
+  var nodes = JSON.parse(JSON.stringify(BASE));
+  var cam = {x:0, y:0, s:0.82};
+  var selectedId = null;
+  var activeId = null;
+  var drag = null;
+  var pan = null;
+  var camAnim = 0;
+  var toastTimer = 0;
+  var touched = false;
+
+  /* ============ helpers ============ */
+  function $(sel, root){ return (root || document).querySelector(sel); }
+  function $$(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function mastery(v){
+    var out = '';
+    for (var i=1;i<=5;i++) out += '<i class="' + (i<=v?'on':'') + '"></i>';
+    return out;
+  }
+  function byId(id){ return nodes.filter(function(n){ return n.id===id; })[0]; }
+  function toast(text){
+    var t = $('#toast');
+    t.textContent = text;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+
+  /* ============ camera ============ */
+  function apply(){
+    var world = $('#world');
+    world.style.transform = 'translate3d(' + cam.x + 'px,' + cam.y + 'px,0) scale(' + cam.s + ')';
+    var far = cam.s < 0.55, near = cam.s >= 0.95;
+    world.classList.toggle('far', far);
+    world.classList.toggle('near', near);
+    $('#zoomlabel').textContent = Math.round(cam.s * 100) + '%';
+    var grid = $('#grid');
+    var size = Math.max(11, 26 * cam.s);
+    grid.style.backgroundSize = size + 'px ' + size + 'px';
+    grid.style.backgroundPosition = cam.x + 'px ' + cam.y + 'px';
+  }
+
+  function zoomAt(mx, my, factor){
+    var wx = (mx - cam.x) / cam.s;
+    var wy = (my - cam.y) / cam.s;
+    var ns = Math.max(0.28, Math.min(2.4, cam.s * factor));
+    cam.x = mx - wx * ns;
+    cam.y = my - wy * ns;
+    cam.s = ns;
+    touched = true;
+    apply();
+  }
+
+  function fit(pad){
+    pad = pad || 92;
+    var xs = nodes.map(function(n){ return n.x; });
+    var xe = nodes.map(function(n){ return n.x + NODE_W; });
+    var ys = nodes.map(function(n){ return n.y; });
+    var ye = nodes.map(function(n){ return n.y + NODE_H; });
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xe);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ye);
+    var s = Math.min((window.innerWidth - pad*2) / (maxX-minX), (window.innerHeight - pad*2) / (maxY-minY), 1.15);
+    s = Math.max(0.3, s);
+    cam.s = s;
+    cam.x = window.innerWidth/2 - (minX+maxX)/2 * s;
+    cam.y = window.innerHeight/2 - (minY+maxY)/2 * s;
+    apply();
+  }
+
+  function ease(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
+
+  function animateCam(tx, ty, ts, dur){
+    cancelAnimationFrame(camAnim);
+    var sx = cam.x, sy = cam.y, ss = cam.s, t0 = performance.now();
+    dur = dur || 600;
+    function step(now){
+      var k = Math.min(1, (now - t0) / dur);
+      var e = ease(k);
+      cam.x = sx + (tx - sx) * e;
+      cam.y = sy + (ty - sy) * e;
+      cam.s = ss + (ts - ss) * e;
+      apply();
+      if (k < 1) camAnim = requestAnimationFrame(step);
+    }
+    camAnim = requestAnimationFrame(step);
+  }
+
+  function focusNode(n, dur){
+    var ts = 1.06;
+    var tx = window.innerWidth/2 - (n.x + NODE_W/2) * ts;
+    var ty = window.innerHeight/2 - (n.y + NODE_H/2) * ts;
+    animateCam(tx, ty, ts, dur || 620);
+  }
+
+  /* ============ render ============ */
+  function renderNodes(){
+    var wrap = $('#nodes');
+    wrap.innerHTML = nodes.map(function(n){
+      return '<article class="node ' + n.status + (n.id===selectedId?' selected':'') + '" data-id="' + n.id + '" style="left:' + n.x + 'px;top:' + n.y + 'px">' +
+        '<span class="kind">' + esc(n.kind || '') + '</span>' +
+        '<div class="title">' + esc(n.title) + '</div>' +
+        '<div class="sub">' + esc(n.sub || '') + '</div>' +
+        '<div class="meta"><span class="mastery">' + mastery(n.mastery || 0) + '</span><span>' + esc(n.meta || '') + '</span></div>' +
+      '</article>';
+    }).join('');
+    renderEdges();
+  }
+
+  function renderEdges(){
+    var map = {};
+    nodes.forEach(function(n){ map[n.id] = n; });
+    var paths = nodes.filter(function(n){ return n.parent && map[n.parent]; }).map(function(n){
+      var p = map[n.parent];
+      var x1 = p.x + NODE_W, y1 = p.y + NODE_H/2;
+      var x2 = n.x, y2 = n.y + NODE_H/2;
+      var dx = Math.max(50, (x2 - x1) * 0.52);
+      var active = (n.id === selectedId || n.parent === selectedId);
+      return '<path class="' + (active?'active':'') + '" d="M' + x1 + ',' + y1 +
+        ' C' + (x1+dx) + ',' + y1 + ' ' + (x2-dx) + ',' + y2 + ' ' + x2 + ',' + y2 + '"/>';
+    }).join('');
+    $('#edges').innerHTML = paths;
+  }
+
+  function pathOf(n){
+    var out = [], cur = n, guard = 0;
+    while (cur && guard++ < 20){ out.unshift(cur.title); cur = cur.parent ? byId(cur.parent) : null; }
+    return out;
+  }
+
+  /* ============ threads ============ */
+  var BPLUS = {
+    intro: [
+      {role:'user', text:'B+ 树到底解决了什么问题？'},
+      {role:'ai', html:'<p>三个关键词：<strong>磁盘 I/O</strong>、<strong>范围查询</strong>、<strong>树高</strong>。</p>' +
+        '<ul><li>磁盘按页读，B+ 树一个节点就是一页，扇出大、树矮。</li>' +
+        '<li>数据全在叶子，叶子之间有链表，范围扫描不用回根。</li>' +
+        '<li>非叶只存键，同样一页能放更多键，进一步压低树高。</li></ul>' +
+        '<p class="muted">想先展开哪一层？我建议从“为什么数据都在叶子”开始。</p>'}
+    ],
+    sections: [
+      {title:'02.2.1 为什么数据都在叶子节点', meta:'3 轮 · 已收口', open:true, level:2,
+        body:[
+          {role:'user', text:'为什么非叶节点不存数据？'},
+          {role:'ai', html:'<p>为了让一页能装下更多键。</p>' +
+            '<p>假设一页 16KB、键 8B、指针 6B：非叶只存 <code>key + ptr</code>，一页能放约 1000 个键，扇出接近 1000；三层就能覆盖 10 亿条记录。</p>' +
+            '<p>代价是每次查询都要走到叶子，但树高通常只有 3 层，最多 3 次 I/O。</p>'}
+        ],
+        subs:[
+          {title:'页分裂的触发条件', meta:'2 轮', open:false, body:[
+            {role:'user', text:'页分裂是怎么发生的？'},
+            {role:'ai', html:'<p>当一个叶子页写满，插入新键时：</p>' +
+              '<ol><li>申请一个新页；</li><li>把一半键挪过去；</li><li>更新父节点的分隔键；</li><li>如果父节点也满，递归分裂。</li></ol>' +
+              '<p>所以随机写入会带来写放大，顺序写入则友好得多。</p>'}
+          ]}
+        ]
+      },
+      {title:'02.2.2 聚簇索引 vs 二级索引', meta:'2 轮', open:false, level:2,
+        body:[
+          {role:'user', text:'聚簇索引和二级索引的差别？'},
+          {role:'ai', html:'<p>聚簇索引的叶子存整行；二级索引的叶子存主键，查整行要<strong>回表</strong>。</p>' +
+            '<p>这也是为什么覆盖索引能省一次 I/O：查询需要的列都在二级索引里，就不用回表。</p>'}
+        ]
+      },
+      {title:'02.2.3 面试常问', meta:'4 个问题', open:false, level:2,
+        body:[
+          {role:'ai', html:'<ul><li>为什么 B+ 树比 B 树更适合数据库？</li><li>为什么 MongoDB 用 B 树而不是 B+ 树？</li><li>页分裂对写性能的影响？</li><li>聚簇索引的优缺点？</li></ul>'}
+        ]
+      }
+    ]
+  };
+
+  var ROOT = {
+    intro: [
+      {role:'user', text:'帮我把数据库系统过一遍，先给一个全局框架。'},
+      {role:'ai', html:'<p>可以分成八个模块。每个模块点开都是一个独立的子对话，不会打断这里的主线。</p>' +
+        '<ol><li>存储引擎：页、缓冲池、堆文件</li><li>索引：B+ 树、LSM、哈希</li><li>查询处理：解析、优化、执行</li>' +
+        '<li>事务与并发：ACID、MVCC、隔离级别</li><li>日志与恢复：WAL、ARIES</li><li>分布式：复制、分片、一致性</li>' +
+        '<li>SQL 与接口</li><li>性能与调优</li></ol>' +
+        '<p class="muted">在画布上点任意模块，就能进入它的子对话。</p>'}
+    ],
+    sections: [
+      {title:'怎么用这张图', meta:'1 轮', open:true, level:2, body:[
+        {role:'ai', html:'<p>滚轮缩放、拖拽平移；点节点进入对话；对话里的标题可以折叠，像 Word 的标题一样。</p>'}
+      ]}
+    ]
+  };
+
+  function generic(n){
+    return {
+      intro: [
+        {role:'user', text:'帮我快速过一遍「' + n.title + '」。'},
+        {role:'ai', html:'<p>先给你一个 3 分钟的骨架：</p><ol><li>它解决什么问题</li><li>核心机制</li><li>常见误区</li></ol>' +
+          '<p class="muted">你想先展开哪一层？</p>'}
+      ],
+      sections: [
+        {title:'核心问题', meta:'1 轮', open:true, level:2, body:[
+          {role:'ai', html:'<p>「' + esc(n.title) + '」存在的意义，是在<strong>成本</strong>和<strong>一致性</strong>之间做取舍。' +
+            '先记住一句话：' + esc(n.sub || '它不是一个孤立的组件') + '。</p>'}
+        ]},
+        {title:'常见误区', meta:'3 条', open:false, level:2, body:[
+          {role:'ai', html:'<ul><li>把它当成黑盒，忽略它和上下游的耦合。</li><li>只记结论，不记它在什么条件下成立。</li><li>用单机直觉去推分布式场景。</li></ul>'}
+        ]},
+        {title:'自测', meta:'3 个问题', open:false, level:2, body:[
+          {role:'ai', html:'<ol><li>如果数据量翻 10 倍，它先坏在哪里？</li><li>它和相邻模块的边界是什么？</li><li>举一个它不适用、但看起来适用的例子。</li></ol>'}
+        ]}
+      ]
+    };
+  }
+
+  function threadFor(n){
+    if (n.id === 'bplus') return BPLUS;
+    if (n.id === 'root') return ROOT;
+    return generic(n);
+  }
+
+  /* ============ render thread ============ */
+  function msgHTML(m){
+    if (m.role === 'user'){
+      return '<div class="msg user"><div class="who">你</div><div class="bubble">' + esc(m.text) + '</div></div>';
+    }
+    return '<div class="msg ai"><div class="who">AI</div><div class="md">' + m.html + '</div></div>';
+  }
+
+  function sectionHTML(s, i){
+    var lvl = s.level || 2;
+    var inner = (s.body || []).map(msgHTML).join('') + (s.subs || []).map(subHTML).join('');
+    return '<section class="sec lvl' + lvl + (s.open ? '' : ' closed') + '" id="sec-' + i + '">' +
+      '<button class="sec-head" type="button">' +
+        '<span class="chev">▾</span>' +
+        '<span class="sec-title">' + esc(s.title) + '</span>' +
+        '<span class="sec-meta">' + esc(s.meta || '') + '</span>' +
+      '</button>' +
+      '<div class="sec-body"><div class="sec-inner"><div class="sec-pad">' + inner + '</div></div></div>' +
+    '</section>';
+  }
+
+  function subHTML(sub){
+    var inner = (sub.body || []).map(msgHTML).join('');
+    return '<div class="subchat' + (sub.open ? ' open' : '') + '">' +
+      '<div class="sub-head">' +
+        '<span class="chev">▾</span>' +
+        '<span class="sub-title">↳ ' + esc(sub.title) + '</span>' +
+        '<span class="sub-meta">' + esc(sub.meta || '') + '</span>' +
+        '<span class="sub-actions"><button class="promote" data-title="' + esc(sub.title) + '">提升为节点</button></span>' +
+      '</div>' +
+      '<div class="sub-body"><div class="sub-inner"><div class="sub-pad">' + inner + '</div></div></div>' +
+    '</div>';
+  }
+
+  function renderThread(n){
+    var t = threadFor(n);
+    var html = t.intro.map(msgHTML).join('');
+    html += t.sections.map(sectionHTML).join('');
+    $('#chatScroll').innerHTML = html;
+    buildOutline(t);
+    bindThread();
+    $('#chatScroll').scrollTop = 0;
+  }
+
+  function buildOutline(t){
+    var html = '<a href="#" class="top" data-top="1">对话开头</a>';
+    t.sections.forEach(function(s, i){
+      html += '<a href="#sec-' + i + '" data-i="' + i + '" class="lvl' + (s.level || 2) + '">' + esc(s.title) + '</a>';
+    });
+    $('#outlineList').innerHTML = html;
+    $$('#outlineList a').forEach(function(a){
+      a.addEventListener('click', function(e){
+        e.preventDefault();
+        if (a.dataset.top){ $('#chatScroll').scrollTo({top:0, behavior:'smooth'}); return; }
+        var sec = $('#sec-' + a.dataset.i);
+        if (sec){ sec.classList.remove('closed'); sec.scrollIntoView({behavior:'smooth', block:'center'}); }
+      });
+    });
+  }
+
+  function bindThread(){
+    $$('.sec-head').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        btn.parentElement.classList.toggle('closed');
+      });
+    });
+    $$('.sub-head').forEach(function(head){
+      head.addEventListener('click', function(e){
+        if (e.target.closest('.promote')) return;
+        head.parentElement.classList.toggle('open');
+      });
+    });
+    $$('.promote').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        promote(btn.dataset.title);
+      });
+    });
+  }
+
+  /* ============ sheet ============ */
+  function openNode(id){
+    var n = byId(id);
+    if (!n) return;
+    selectedId = id;
+    renderNodes();
+    focusNode(n, 620);
+    setTimeout(function(){ showSheet(n); }, 170);
+  }
+
+  function showSheet(n){
+    activeId = n.id;
+    var crumb = pathOf(n).map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('<i>/</i>');
+    $('#crumb').innerHTML = crumb;
+    $('#sheetTitle').textContent = n.title;
+    $('#sheetSubline').innerHTML =
+      '<span class="pill ' + (n.status==='done'?'green':'') + '">' + (n.status==='done'?'已收口':n.status==='active'?'进行中':'未开始') + '</span>' +
+      '<span>' + esc(n.sub || '') + '</span>' +
+      '<span>·</span><span>' + esc(n.meta || '') + '</span>' +
+      '<span>·</span><span>掌握度 ' + (n.mastery || 0) + '/5</span>';
+    $('#search').value = '';
+    $('#searchCount').textContent = '';
+    renderThread(n);
+    $('#sheet').classList.add('open');
+    $('#sheet').setAttribute('aria-hidden', 'false');
+    $('#scrim').classList.add('show');
+  }
+
+  function closeSheet(){
+    $('#sheet').classList.remove('open');
+    $('#sheet').setAttribute('aria-hidden', 'true');
+    $('#scrim').classList.remove('show');
+    activeId = null;
+  }
+
+  /* ============ actions ============ */
+  function promote(title){
+    var n = byId(activeId);
+    if (!n){ toast('先打开一个节点'); return; }
+    var siblings = nodes.filter(function(x){ return x.parent === n.id; });
+    var maxY = n.y - 40;
+    siblings.forEach(function(x){ if (x.y > maxY) maxY = x.y; });
+    var id = 'n' + Date.now();
+    var newNode = {
+      id:id, parent:n.id, x:n.x + 340, y:maxY + 110,
+      title:title, sub:'从对话中提升', kind:'子话题', status:'seed', mastery:0, meta:'新建 · 0 轮'
+    };
+    nodes.push(newNode);
+    selectedId = id;
+    renderNodes();
+    closeSheet();
+    setTimeout(function(){ focusNode(newNode, 650); toast('已提升为画布节点'); }, 240);
+  }
+
+  function closureHTML(n){
+    var points = n.id === 'bplus' ? [
+      '扇出由页大小决定，非叶只存 key+ptr，树高通常 3 层。',
+      '数据全在叶子，叶子链表让范围查询不用回根。',
+      '页分裂带来写放大，顺序写比随机写友好。'
+    ] : [
+      '已梳理「' + n.title + '」的核心问题与适用边界。',
+      '记录了 2 个仍未解决的问题。',
+      '留下了 3 个可复用的引用与产物。'
+    ];
+    return '<div class="closure">' +
+      '<div class="closure-top"><span class="closure-badge">收口卡</span><span class="closure-time">刚刚</span></div>' +
+      '<h4>' + esc(n.title) + ' · 3 条结论</h4>' +
+      '<ul>' + points.map(function(p){ return '<li>' + esc(p) + '</li>'; }).join('') + '</ul>' +
+      '<div class="closure-foot"><span>掌握度 ' + (n.mastery || 0) + '/5</span><span>2 个未解问题</span><span>3 个产物</span></div>' +
+    '</div>';
+  }
+
+  function closeNode(){
+    var n = byId(activeId);
+    if (!n) return;
+    n.status = 'done';
+    n.mastery = Math.min(5, (n.mastery || 0) + 1);
+    n.meta = '已收口 · ' + n.mastery + '/5';
+    renderNodes();
+    $('#chatScroll').insertAdjacentHTML('beforeend', closureHTML(n));
+    $('#chatScroll').scrollTo({top: $('#chatScroll').scrollHeight, behavior:'smooth'});
+    toast('已收口 · 节点会折叠成一行摘要');
+    setTimeout(function(){ closeSheet(); focusNode(n, 600); }, 1000);
+  }
+
+  /* ============ search ============ */
+  $('#search').addEventListener('input', function(e){
+    var q = e.target.value.trim().toLowerCase();
+    var count = 0;
+    $$('#chatScroll > .sec').forEach(function(sec){
+      var hit = !q || sec.textContent.toLowerCase().indexOf(q) >= 0;
+      sec.classList.toggle('filtered-out', !hit);
+      sec.classList.toggle('search-hit', !!q && hit);
+      if (hit){ count++; if (q) sec.classList.remove('closed'); }
+    });
+    if (q){
+      $$('.subchat').forEach(function(sub){
+        if (sub.textContent.toLowerCase().indexOf(q) >= 0) sub.classList.add('open');
+      });
+    }
+    $('#searchCount').textContent = q ? count + ' 节' : '';
+  });
+
+  /* ============ composer ============ */
+  function scrollBottom(){
+    var el = $('#chatScroll');
+    el.scrollTo({top: el.scrollHeight, behavior:'smooth'});
+  }
+
+  function canned(text){
+    if (/页分裂|分裂/.test(text)) return '（原型回答）页分裂的本质是“把一页的写压力分摊到两页”，代价是父节点更新和空间碎片。想深挖可以看分裂策略：50/50、右倾、以及 B* 树的兄弟借位。';
+    if (/索引|B\+|回表/.test(text)) return '（原型回答）可以沿着“扇出 → 树高 → I/O 次数”这条链推：扇出越大，树越矮，点查越省 I/O；但范围查询还要看叶子链表和聚簇方式。';
+    return '（原型回答）这个问题可以拆成三层：它解决什么、代价是什么、什么时候不适用。你想先展开哪一层？';
+  }
+
+  function send(){
+    var input = $('#input');
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    var live = $('#chatScroll .live');
+    if (!live){
+      live = document.createElement('div');
+      live.className = 'live';
+      $('#chatScroll').appendChild(live);
+    }
+    live.insertAdjacentHTML('beforeend',
+      '<div class="msg user"><div class="who">你</div><div class="bubble">' + esc(text) + '</div></div>');
+    var ai = document.createElement('div');
+    ai.className = 'msg ai';
+    ai.innerHTML = '<div class="who">AI</div><div class="md"><p class="muted">思考中…</p></div>';
+    live.appendChild(ai);
+    scrollBottom();
+    setTimeout(function(){
+      ai.querySelector('.md').innerHTML = '<p>' + esc(canned(text)) + '</p>';
+      scrollBottom();
+    }, 620);
+  }
+
+  /* ============ events ============ */
+  $('#nodes').addEventListener('pointerdown', function(e){
+    var el = e.target.closest('.node');
+    if (!el) return;
+    e.stopPropagation();
+    var n = byId(el.dataset.id);
+    if (!n) return;
+    drag = {id:n.id, sx:e.clientX, sy:e.clientY, nx:n.x, ny:n.y, moved:false, el:el};
+    try { el.setPointerCapture(e.pointerId); } catch(err){}
+  });
+
+  $('#nodes').addEventListener('pointermove', function(e){
+    if (!drag) return;
+    var dx = (e.clientX - drag.sx) / cam.s;
+    var dy = (e.clientY - drag.sy) / cam.s;
+    if (!drag.moved && Math.sqrt(dx*dx + dy*dy) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    touched = true;
+    var n = byId(drag.id);
+    n.x = drag.nx + dx;
+    n.y = drag.ny + dy;
+    drag.el.style.left = n.x + 'px';
+    drag.el.style.top = n.y + 'px';
+    renderEdges();
+  });
+
+  $('#nodes').addEventListener('pointerup', function(e){
+    if (!drag) return;
+    var d = drag;
+    drag = null;
+    if (!d.moved) openNode(d.id);
+  });
+
+  $('#canvas').addEventListener('pointerdown', function(e){
+    if (e.target.closest('.node')) return;
+    if (e.target.closest('#zoomctl') || e.target.closest('#hint')) return;
+    pan = {sx:e.clientX, sy:e.clientY, cx:cam.x, cy:cam.y};
+    $('#canvas').classList.add('panning');
+    try { $('#canvas').setPointerCapture(e.pointerId); } catch(err){}
+  });
+
+  $('#canvas').addEventListener('pointermove', function(e){
+    if (!pan) return;
+    cam.x = pan.cx + (e.clientX - pan.sx);
+    cam.y = pan.cy + (e.clientY - pan.sy);
+    touched = true;
+    apply();
+  });
+
+  $('#canvas').addEventListener('pointerup', function(){
+    pan = null;
+    $('#canvas').classList.remove('panning');
+  });
+
+  $('#canvas').addEventListener('wheel', function(e){
+    e.preventDefault();
+    var factor = Math.exp(-e.deltaY * 0.0012);
+    zoomAt(e.clientX, e.clientY, factor);
+  }, {passive:false});
+
+  $('#canvas').addEventListener('dblclick', function(e){
+    if (e.target.closest('.node')) return;
+    fit(92);
+  });
+
+  $('#zin').addEventListener('click', function(){ zoomAt(window.innerWidth/2, window.innerHeight/2, 1.22); });
+  $('#zout').addEventListener('click', function(){ zoomAt(window.innerWidth/2, window.innerHeight/2, 1/1.22); });
+  $('#zfit').addEventListener('click', function(){ fit(92); });
+  $('#fitBtn').addEventListener('click', function(){ fit(92); });
+  $('#tidyBtn').addEventListener('click', function(){
+    nodes.forEach(function(n){
+      var b = BASE.filter(function(x){ return x.id===n.id; })[0];
+      if (b){ n.x = b.x; n.y = b.y; }
+    });
+    renderNodes();
+    fit(92);
+    toast('已恢复自动布局');
+  });
+  $('#helpBtn').addEventListener('click', function(){
+    toast('滚轮缩放 · 拖拽平移 · 点节点进入对话 · Esc 关闭 · F 适配');
+  });
+
+  $('#closeSheetBtn').addEventListener('click', closeSheet);
+  $('#scrim').addEventListener('click', closeSheet);
+  $('#locateBtn').addEventListener('click', function(){
+    var n = byId(activeId);
+    closeSheet();
+    if (n) setTimeout(function(){ focusNode(n, 600); toast('已定位到画布'); }, 180);
+  });
+  $('#closeNodeBtn').addEventListener('click', closeNode);
+
+  $('#collapseAll').addEventListener('click', function(){
+    $$('#chatScroll .sec').forEach(function(s){ s.classList.add('closed'); });
+  });
+  $('#expandAll').addEventListener('click', function(){
+    $$('#chatScroll .sec').forEach(function(s){ s.classList.remove('closed'); });
+  });
+
+  $('#send').addEventListener('click', send);
+  $('#input').addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape'){
+      if ($('#sheet').classList.contains('open')) closeSheet();
+    }
+    if (e.key === 'f' || e.key === 'F'){
+      if (!e.target.closest('input,textarea')) fit(92);
+    }
+  });
+
+  /* ============ init ============ */
+  if (location.search.indexOf('still') >= 0) document.body.classList.add('no-anim');
+  renderNodes();
+  if (!location.hash){
+    requestAnimationFrame(function(){ fit(92); });
+    setTimeout(function(){ if (!touched) fit(92); }, 220);
+    window.addEventListener('load', function(){ if (!touched) fit(92); });
+  }
+  window.addEventListener('resize', function(){
+    if (!touched && !$('#sheet').classList.contains('open')) fit(92);
+  });
+  setTimeout(function(){ $('#hint').classList.add('fade'); }, 8500);
+
+  if (location.hash){
+    var hp = location.hash.slice(1).split('/');
+    if (byId(hp[0])) setTimeout(function(){
+      openNode(hp[0]);
+      if (hp[1] === 'sub') setTimeout(function(){
+        var sub = document.querySelector('.subchat');
+        if (sub){
+          sub.classList.add('open');
+          var sc = $('#chatScroll');
+          var r = sub.getBoundingClientRect(), c = sc.getBoundingClientRect();
+          sc.scrollTop = sc.scrollTop + (r.top - c.top) - 150;
+        }
+      }, 250);
+    }, 150);
+  }
+})();
+</script>
+</body>
+</html>
