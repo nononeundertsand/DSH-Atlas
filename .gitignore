@@ -1,10 +1,41 @@
+# dependencies / build output
 node_modules/
+lib/
 dist/
 build/
 coverage/
 .turbo/
-*.log
-.DS_Store
+
+# local DSH / Atlas data (never commit conversations or credentials)
+.dsh/
 .atlas/
+atlas-data/
+*.atlas
+*.jsonl
+
+# secrets and local environment
 .env
 .env.*
+!.env.example
+.env.local
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+.credentials*
+secrets*
+*.secret
+
+# logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,5 @@
+# DSH-Atlas 是一个单包插件：同一行同时加载 Host 半（路由/存储/模型）
+# 与浏览器半（package.json 的 dsh.client 声明）。
+- insert:
+    - id: atlas
+      name: dsh-atlas
