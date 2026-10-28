@@ -35,8 +35,8 @@ import { DEFAULT_VIEWPORT } from '../shared/protocol.js'
 type Json = Record<string, unknown>
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
-const NODE_W = 280
-const NODE_H = 92
+const NODE_W = 288
+const NODE_H = 104
 
 export class AtlasStore {
   private readonly root: string

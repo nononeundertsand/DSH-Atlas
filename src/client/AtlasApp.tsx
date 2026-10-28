@@ -198,6 +198,7 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
     <div className="atlas-app">
       <Canvas
         key={snapshot.workspace.id}
+        workspaceId={snapshot.workspace.id}
         nodes={snapshot.nodes}
         viewport={snapshot.viewport}
         onOpen={(node) => void openNode(node)}

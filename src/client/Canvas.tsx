@@ -2,13 +2,14 @@
  * 无限画布：世界坐标 + 相机，自绘 DOM + 单层 SVG 边。
  * 只做地图该做的事：平移、缩放、拖拽、适配、语义缩放。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AtlasNode, Point, Viewport } from '../shared/types.js'
 
-const NODE_W = 280
-const NODE_H = 92
+const NODE_W = 288
+const NODE_H = 104
 
 export interface CanvasProps {
+  workspaceId: string
   nodes: AtlasNode[]
   viewport: Viewport
   onOpen: (node: AtlasNode) => void
@@ -27,10 +28,11 @@ interface DragState {
   moved: boolean
 }
 
-export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
+export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<Viewport>(viewport)
   const [localNodes, setLocalNodes] = useState(nodes)
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(workspaceId))
   const [panning, setPanning] = useState(false)
   const panRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -39,6 +41,11 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
 
   useEffect(() => setLocalNodes(nodes), [nodes])
   useEffect(() => setCamera(viewport), [viewport])
+  useEffect(() => setCollapsed(loadCollapsed(workspaceId)), [workspaceId])
+  useEffect(() => saveCollapsed(workspaceId, collapsed), [workspaceId, collapsed])
+
+  const hidden = useMemo(() => hiddenDescendants(localNodes, collapsed), [localNodes, collapsed])
+  const visibleNodes = useMemo(() => localNodes.filter((node) => !hidden.has(node.id)), [localNodes, hidden])
 
   const persist = useCallback(
     (next: Viewport) => {
@@ -78,12 +85,12 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
 
   const fit = useCallback(() => {
     const stage = stageRef.current
-    if (!stage || localNodes.length === 0) return
+    if (!stage || visibleNodes.length === 0) return
     const rect = stage.getBoundingClientRect()
-    const minX = Math.min(...localNodes.map((node) => node.position.x))
-    const minY = Math.min(...localNodes.map((node) => node.position.y))
-    const maxX = Math.max(...localNodes.map((node) => node.position.x + NODE_W))
-    const maxY = Math.max(...localNodes.map((node) => node.position.y + NODE_H))
+    const minX = Math.min(...visibleNodes.map((node) => node.position.x))
+    const minY = Math.min(...visibleNodes.map((node) => node.position.y))
+    const maxX = Math.max(...visibleNodes.map((node) => node.position.x + NODE_W))
+    const maxY = Math.max(...visibleNodes.map((node) => node.position.y + NODE_H))
     const pad = 70
     const zoom = clamp(
       Math.min((rect.width - pad * 2) / (maxX - minX), (rect.height - pad * 2) / (maxY - minY), 1.15),
@@ -97,7 +104,7 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
     }
     setCamera(next)
     persist(next)
-  }, [localNodes, persist])
+  }, [visibleNodes, persist])
 
   const lod = camera.zoom >= 0.85 ? '' : camera.zoom >= 0.5 ? 'lod-mid' : camera.zoom >= 0.3 ? 'lod-far' : 'lod-map'
 
@@ -139,8 +146,8 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
 
       <div className="atlas-world" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
         <svg className="atlas-edges" width={1} height={1} style={{ overflow: 'visible', position: 'absolute', left: 0, top: 0 }}>
-          {localNodes.map((node) => {
-            const parent = node.parentId ? localNodes.find((item) => item.id === node.parentId) : undefined
+          {visibleNodes.map((node) => {
+            const parent = node.parentId ? visibleNodes.find((item) => item.id === node.parentId) : undefined
             if (!parent) return null
             const x1 = parent.position.x + NODE_W
             const y1 = parent.position.y + NODE_H / 2
@@ -158,10 +165,14 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
           })}
         </svg>
 
-        {localNodes.map((node) => (
+        {visibleNodes.map((node) => {
+          const childCount = localNodes.filter((item) => item.parentId === node.id).length
+          const descendantTotal = countDescendants(localNodes, node.id)
+          const isCollapsed = collapsed.has(node.id)
+          return (
           <div
             key={node.id}
-            className={`atlas-node is-${node.status}`}
+            className={`atlas-node is-${node.status} ${childCount > 0 ? 'has-children' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}
             style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
             title={node.title}
             onPointerDown={(event) => {
@@ -219,19 +230,46 @@ export function Canvas({ nodes, viewport, onOpen, onAddChild, onMove, onViewport
                 ))}
               </span>
             </div>
-            <button
-              type="button"
-              className="atlas-node-add"
-              title="添加子节点"
-              onClick={(event) => {
-                event.stopPropagation()
-                onAddChild(node)
-              }}
-            >
-              +
-            </button>
+            <div className="atlas-node-actions">
+              {childCount > 0 ? (
+                <button
+                  type="button"
+                  className="atlas-node-toggle"
+                  title={isCollapsed ? `展开 ${descendantTotal} 个后代节点` : `收起 ${descendantTotal} 个后代节点`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setCollapsed((current) => {
+                      const next = new Set(current)
+                      if (next.has(node.id)) next.delete(node.id)
+                      else next.add(node.id)
+                      return next
+                    })
+                  }}
+                >
+                  {isCollapsed ? `+${descendantTotal}` : '−'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="atlas-node-add"
+                title="添加子节点"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setCollapsed((current) => {
+                    if (!current.has(node.id)) return current
+                    const next = new Set(current)
+                    next.delete(node.id)
+                    return next
+                  })
+                  onAddChild(node)
+                }}
+              >
+                +
+              </button>
+            </div>
           </div>
-        ))}
+          )
+        })}
       </div>
 
       <div style={{ position: 'absolute', right: 16, bottom: 16, display: 'flex', gap: 6, zIndex: 10 }}>
@@ -266,4 +304,53 @@ function statusLabel(status: AtlasNode['status']): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function countDescendants(nodes: AtlasNode[], nodeId: string): number {
+  let count = 0
+  const walk = (parentId: string) => {
+    for (const node of nodes) {
+      if (node.parentId !== parentId) continue
+      count++
+      walk(node.id)
+    }
+  }
+  walk(nodeId)
+  return count
+}
+
+/** 收起一个节点时，隐藏它的整棵子树。 */
+function hiddenDescendants(nodes: AtlasNode[], collapsed: Set<string>): Set<string> {
+  const hidden = new Set<string>()
+  const walk = (parentId: string) => {
+    for (const node of nodes) {
+      if (node.parentId !== parentId || hidden.has(node.id)) continue
+      hidden.add(node.id)
+      walk(node.id)
+    }
+  }
+  for (const id of collapsed) walk(id)
+  return hidden
+}
+
+function collapseKey(workspaceId: string): string {
+  return `dsh-atlas:collapsed:${workspaceId}`
+}
+
+function loadCollapsed(workspaceId: string): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(collapseKey(workspaceId))
+    const ids = raw ? (JSON.parse(raw) as unknown) : []
+    return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveCollapsed(workspaceId: string, collapsed: Set<string>): void {
+  try {
+    window.localStorage.setItem(collapseKey(workspaceId), JSON.stringify([...collapsed]))
+  } catch {
+    // localStorage 不可用时只保留本次会话的收起状态。
+  }
 }
