@@ -54,8 +54,12 @@ Host 端有端到端冒烟测试（真实 HTTP + SSE + 假模型），见 [`test
 需要 DeepSeek Harness `0.2.x`、Node.js `22.19+`、npm；DSH 的插件管理器还要求 `pnpm` 在 PATH 中。
 
 ```bash
-git clone https://github.com/DSH-Atlas/dsh-atlas.git
-cd dsh-atlas
+# 直接填 GitHub 链接（推荐给普通用户）
+dsh plugin --profile web add https://github.com/nononeundertsand/DSH-Atlas.git
+
+# 或者从本地源码安装（开发时用）
+git clone https://github.com/nononeundertsand/DSH-Atlas.git
+cd DSH-Atlas
 npm install
 npm run check          # typecheck + build + 冒烟测试
 dsh plugin --profile web add .
@@ -179,7 +183,7 @@ npm run check        # 三者一起跑
 npm run dev          # Host watch（客户端改动后需再跑一次 build）
 ```
 
-`lib/` 是构建产物，不提交到 Git；发布到 npm 时由 `package.json#files` 包含。
+`lib/` 是构建产物。为了让 `dsh plugin add <GitHub URL>` 对其他人直接可用，仓库会保留构建后的 `lib/`；修改源码后请运行 `npm run build`，并提交更新后的 `lib/`。
 
 ### 浏览器插件协议
 
