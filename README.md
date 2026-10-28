@@ -1,4 +1,4 @@
-# Atlas
+# DSH-Atlas
 
 > 把对话长成一张地图。
 > A spatial workspace for long conversations.
@@ -7,7 +7,7 @@
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-6ea8fe.svg)](https://github.com/deepseek-ai/deepseek-harness)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-f2cc60.svg)](#roadmap)
 
-Atlas 是 **DeepSeek Harness** 的插件（开发中）：把线性对话变成一张**可缩放的任务地图**。
+DSH-Atlas 是 **DeepSeek Harness** 的插件（开发中）：把线性对话变成一张**可缩放的任务地图**。
 
 - 每个节点是一段对话，画布表达任务结构；
 - 点开节点，相机飞入并打开对话；

@@ -1,4 +1,4 @@
-# Atlas · 技术设计文档
+# DSH-Atlas · 技术设计文档
 
 > 面向 DeepSeek Harness 的空间化对话工作台
 > A spatial workspace for long conversations
@@ -10,7 +10,7 @@
 | 日期 | 2026-10-28 |
 | 作者 | Atlas contributors |
 | 许可证 | MIT |
-| 仓库 | `dsh-atlas` |
+| 仓库 | `DSH-Atlas` |
 | 包名 | `dsh-atlas` |
 | 兼容 | DeepSeek Harness 0.1.x（developer preview） |
 
@@ -883,7 +883,7 @@ docs/assets/subchat.png
 ### E. 命名与商标
 
 - 项目名：**Atlas**；中文：**图志**。
-- 包名：`dsh-atlas`；仓库：`dsh-atlas`。
+- 包名：`dsh-atlas`；仓库：`DSH-Atlas`。
 - 标语：**把对话长成一张地图。**
 - “Atlas” 是常见词，MongoDB Atlas、Atlas Copco 等已使用；开源项目可用，但 README 需注明无关联，商业发行前做商标检索。
 - npm 若被占用，使用 scope：`@yourorg/dsh-atlas`。
