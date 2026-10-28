@@ -54,8 +54,8 @@ Host 端有端到端冒烟测试（真实 HTTP + SSE + 假模型），见 [`test
 需要 DeepSeek Harness `0.2.x`、Node.js `22.19+`、npm；DSH 的插件管理器还要求 `pnpm` 在 PATH 中。
 
 ```bash
-# 直接填 GitHub 链接（推荐给普通用户）
-dsh plugin --profile web add https://github.com/nononeundertsand/DSH-Atlas.git
+# 直接填 GitHub 仓库（推荐给普通用户；请使用 github:owner/repo 形式）
+dsh plugin --profile web add github:nononeundertsand/DSH-Atlas
 
 # 或者从本地源码安装（开发时用）
 git clone https://github.com/nononeundertsand/DSH-Atlas.git
