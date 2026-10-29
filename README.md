@@ -1,85 +1,211 @@
 # DSH-Atlas
 
-> 把对话长成一张地图。
+> 把对话长成一张地图。  
 > A spatial workspace for long conversations.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-6ea8fe.svg)](https://github.com/deepseek-ai/deepseek-harness)
 [![Status: MVP](https://img.shields.io/badge/status-MVP-f2cc60.svg)](#roadmap)
 
-DSH-Atlas 是 **DeepSeek Harness** 的插件：把线性对话组织为一张可缩放的任务地图。
+---
 
-- 每个节点对应一段对话，画布表达任务结构；
-- 点击节点，画布保留原位，打开纸张式对话面板；
-- 回答中的标题生成目录轨，可跳转定位；
-- 任意回答可以**分支**成子聊天，再**提升**为画布子节点；
-- 关闭节点时生成**收口卡**，再次打开时先呈现**续接简报**；
-- 画布同时作为复习地图：绿色为已收口，蓝色为进行中，灰色为未开始。
+## 你是否也遇到过这些时刻？
 
-设计原则：**树负责结构，栈负责当下，列表负责回访。**
+- 处理一个长任务时，同时开了好几个侧边聊天框，最后分不清哪条在讲什么；
+- 想回到三天前某个结论，只能在一长串消息里反复往上翻；
+- 一个问题聊到一半，想单独深挖某个子问题，又怕把主线聊乱；
+- 聊完就忘，下次打开只记得“好像聊过”，却想不起聊到了哪；
+- 本地攒了很多聊天记录，却没有一个真正好用的地方去回看和整理。
 
-静态交互原型：[`docs/prototype.html`](docs/prototype.html)（单文件、零依赖）。
-完整设计：[`docs/design.md`](docs/design.md)。
+**DSH-Atlas 就是为这些问题做的。**
+
+它是 **DeepSeek Harness** 的一个插件：把一条越聊越长的对话，变成一张可以缩放、拖动、随时回看的 **任务地图**。
+
+每一个节点是一段独立对话；节点之间用连线表达结构；点开节点，就像翻开一页纸，继续聊、做分支、收口、复习。你不再需要靠记忆维护上下文，也不需要开十几个侧边栏。
+
+---
+
+## Atlas 是什么
+
+一句话：**把线性的聊天，整理成可回访的空间。**
+
+```
+L0 画布   任务地图（例如：数据库 8 个模块）
+L1 节点   模块对话（02 索引 → B+ 树）
+L2 标题   子问题（页分裂 / 聚簇索引）
+L3+       不再嵌套，改为「提升为节点」
+```
+
+- **画布负责广度**：所有任务一眼看清；
+- **节点内标题负责深度**：一个话题内部继续展开；
+- **收口卡负责回访**：关闭节点不是删除，而是把这段对话压缩成一张可再次打开的卡。
 
 ![Atlas canvas](docs/assets/canvas.png)
 
-## 当前状态
+---
 
-已完成可运行的 MVP（M1 + M2 + M3 基础版）：
+## 功能一览
 
-| 能力 | 状态 |
+| 功能 | 你能得到什么 |
 |---|---|
-| 无限画布：平移、缩放、拖拽、适配、语义缩放 | ✅ |
-| 主题：跟随 DSH 亮/暗配色与字体 token，边缘清晰无重模糊 | ✅ |
-| 节点 CRUD：新建根/子节点、重命名、移动、删除、收起/展开子树 | ✅ |
-| 卡片记忆：显示上次打开时间与停留时长，悬停看完整文案 | ✅ |
-| 掌握度：5 段颜色条，对话头部可点击并显示百分比 | ✅ |
-| 界面设置：卡片大小、对话面板宽度、对话字号 | ✅ |
-| 更新检测：读取 GitHub 版本，顶栏提示新版本 | ✅ |
-| 对话面板：SSE 流式回答、Markdown 基础排版、目录轨 | ✅ |
-| 选中解释：鼠标选中对话文字，弹出结合上下文的 AI 解释 | ✅ |
-| 子聊天：从任意回答分支、继续追问、提升为节点 | ✅ |
-| 收口卡：模型生成、失败降级、掌握度、未解问题 | ✅ |
-| 续接简报：重新打开已收口节点时展示 | ✅ |
-| 搜索：节点、消息、收口卡 | ✅ |
-| 本地优先：`~/.dsh/atlas` 文件存储 | ✅ |
-| 复习（FSRS）、导出/导入、Agent mode | 未开始 |
+| **任务地图** | 无限画布，平移、缩放、拖拽、适配；节点多也不会乱 |
+| **一节点一对话** | 每个节点有独立上下文，互不污染 |
+| **收口卡** | 关闭节点时生成结论、要点、未解问题与掌握度 |
+| **续接简报** | 再次打开已收口节点，先看上次聊到哪，再决定是否继续 |
+| **子聊天** | 从任意回答「分支」出一个子问题，聊完可「提升为节点」 |
+| **卡片记忆** | 卡片显示上次打开时间与停留时长，知道哪些内容最近碰过 |
+| **掌握度** | 5 段颜色条记录 0–5 级；对话头部可点击并显示百分比 |
+| **选中解释** | 鼠标选中对话里的词或句子，自动结合当前上下文解释 |
+| **全局搜索** | 同时搜索节点、消息与收口卡 |
+| **界面设置** | 卡片大小、对话面板宽度、对话字号都能调 |
+| **深浅色主题** | 跟随 DSH 的亮色/暗色配色与字体 token |
+| **本地优先** | 工作区存在 `~/.dsh/atlas`，不依赖云端账号 |
 
-Host 端有端到端冒烟测试（真实 HTTP + SSE + 假模型），见 [`tests/smoke.mjs`](tests/smoke.mjs)。
-浏览器端按 DSH 0.2.1 的 `dsh.client` / `__ModuleLoader__` / slot 协议构建。
+### 对话与收口
 
-已在 **DSH `0.2.1-rc.2` + 真实 `deepseek-flash`** 上实测：
+![Atlas chat](docs/assets/chat.png)
 
-- `dsh plugin --profile web add .` 成功，Boot graph 包含 `dsh-atlas`；
-- 组合模块 URL `/plugins/??dsh-atlas/client.js` 返回 200；
-- 无头浏览器加载 `/#atlas` 后，页面出现 `.atlas-app` 与 `.atlas-canvas`；
-- 真实模型 SSE 流式返回，收口卡生成并校验成功。
+### 子聊天与提升
+
+![Atlas subchat](docs/assets/subchat.png)
+
+---
+
+## 5 分钟上手
+
+1. 安装插件并打开 DSH Web（见下方「安装」）。
+2. 左侧边栏出现 **Atlas · 图志**，点进去。
+3. 输入第一个模块，例如「02 索引」。
+4. 点击节点，问：「B+ 树为什么把数据放在叶子节点？」。
+5. 回答下方点「分支」，把「页分裂」展开成子聊天。
+6. 子聊天里继续追问，再点「提升为节点」，画布上就多了一个子节点。
+7. 回到主节点，点右上角「收口」；节点变绿，生成结论、要点、未解问题与掌握度。
+8. 再次打开该节点，先看到续接简报；点「重新打开」即可继续追问。
+9. 在对话里选中一个词，松手后会弹出「AI 解释」，同时给出通用含义和当前语境下的含义。
+10. 顶栏「⚙ 设置」可调整卡片大小、对话面板宽度与字号。
+
+### 一个典型工作流
+
+```
+新建「数据库」根节点
+  → 聊「事务与并发」
+  → 分支「MVCC 是什么」
+  → 提升为子节点
+  → 收口「事务与并发」，得到一张结论卡
+  → 一周后打开，先看续接简报，再决定复习还是继续
+```
+
+---
+
+## 核心设计原则
+
+Atlas 不是“另一个聊天客户端”，它首先是一张**地图**。几条原则决定了它的形态：
+
+### 1. 树负责结构，栈负责当下，列表负责回访
+
+- **树**：节点之间的父子关系，表达任务结构；
+- **栈**：当前打开的对话，只处理眼前这一段；
+- **列表**：搜索、收口卡、最近打开，负责回头找东西。
+
+三者各司其职，不把所有信息塞进同一条无限长的消息流。
+
+### 2. 关闭不是删除，而是收口
+
+「收口」是把一段对话压缩成一张卡：结论、要点、未解问题、掌握度。
+
+- 对话内容仍然保留；
+- 节点在画布上变为已收口状态；
+- 下次打开先看续接简报，而不是重新读完整 transcript。
+
+### 3. 节点边界是硬边界
+
+每个节点是一段独立上下文。祖先节点只向子节点传递收口卡，不传完整聊天记录。这样：
+
+- 单个节点的上下文不会无限膨胀；
+- 子节点不会被父节点的历史细节淹没；
+- 提升为节点时，子聊天复制自己的消息与引用，父节点只保留一条关系。
+
+### 4. 本地优先，网络请求可控
+
+工作区数据保存在本机 `~/.dsh/atlas`。除了模型 provider 与可关闭的 GitHub 版本检查，插件不主动发出网络请求。
+
+### 5. 先让地图可用，再让地图聪明
+
+复习算法、自动布局、Agent mode 都建立在地图结构稳定之后。当前版本优先保证：**建得出来、聊得下去、收得回来、找得到。**
+
+---
 
 ## 安装
 
-需要 DeepSeek Harness `0.2.x`、Node.js `22.19+`、npm；DSH 的插件管理器还要求 `pnpm` 在 PATH 中。
+需要：
+
+- DeepSeek Harness `0.2.x`（在 `0.2.1-rc.2` 上实测）；
+- Node.js `22.19+`；
+- `pnpm` 在 PATH 中（DSH 插件管理器依赖它）。
 
 ```bash
-# 直接填 GitHub 仓库（推荐给普通用户；请使用 github:owner/repo 形式）
+# 推荐：直接从 GitHub 安装
 dsh plugin --profile web add github:nononeundertsand/DSH-Atlas
 
-# 或者从本地源码安装（开发时用）
-git clone https://github.com/nononeundertsand/DSH-Atlas.git
-cd DSH-Atlas
-npm install
-npm run check          # typecheck + build + 冒烟测试
-dsh plugin --profile web add .
+# 启动 DSH Web
 dsh web
 ```
 
-打开 DSH Web 后，左侧边栏会出现 **Atlas · 图志** 图标。
-访问 `http://127.0.0.1:<port>/#atlas` 也可以直接打开地图面板。
+打开 DSH Web 后，左侧边栏会出现 **Atlas · 图志**。
+也可以直接访问 `http://127.0.0.1:<port>/#atlas`。
 
 > 如果本机还没有 `dsh` 命令，可先安装：
 > `npm install -g @deepseek-ai/dsh@0.2.1-rc.2`。
 > DSH 仍处于 developer preview，插件 API 可能随版本变化。
 
-### 可选配置
+---
+
+## 更新
+
+DSH 的插件管理器不会自动拉取 Git 更新。Atlas 内置了轻量版本检测：
+
+- Host 每 6 小时读取一次 GitHub 上的 `package.json` 版本；
+- 顶栏出现 `↑ vX.Y.Z` 表示有新版本；
+- 检测只提示，不自动替换正在运行的 Host 代码；
+- 可用 `checkUpdates: false` 关闭检测。
+
+更新步骤：
+
+```bash
+dsh plugin --profile web update dsh-atlas
+dsh web
+```
+
+如果 pnpm 没有重新解析 Git 依赖，重新 add 一次：
+
+```bash
+dsh plugin --profile web add github:nononeundertsand/DSH-Atlas
+```
+
+> 发布新版本时必须提升 `package.json` 的 `version`，否则检测不会认为有新版本。
+
+---
+
+## 常见问题
+
+**数据存在哪里？**  
+`~/.dsh/atlas/workspaces/<workspace-id>/`，按工作区存放节点、线程、消息与收口卡。
+
+**收口会删除聊天吗？**  
+不会。收口只是生成一张总结卡并把节点标记为已收口，原始消息仍然保留。
+
+**为什么点击节点没有跳转页面？**  
+Atlas 使用“纸张式”对话面板，画布保留在背景原位，方便随时回到地图。
+
+**没有可用模型怎么办？**  
+画布、节点、搜索和本地存储仍可使用；对话与收口会返回明确的 `E_AUTH` / `E_MODEL` 错误。
+
+**选中解释依赖什么？**  
+依赖 DSH 当前可用的模型。选中文字后，Atlas 会把节点、最近对话与选中内容一起交给模型。
+
+---
+
+## 可选配置
 
 在 profile 的 `cordis.patch.yml` 中覆盖默认模型、数据目录或更新检测：
 
@@ -94,70 +220,13 @@ dsh web
     # updateRepo: nononeundertsand/DSH-Atlas
 ```
 
-不填 `provider` / `model` 时，Atlas 自动选择第一个可用 provider 的模型。
-如果没有可用模型，对话会返回明确的 `E_AUTH` / `E_MODEL` 错误，画布与收口降级仍可用。
+不填 `provider` / `model` 时，Atlas 会自动选择第一个可用 provider 的模型。
 
-## 更新与自动检测
+---
 
-DSH 的 `dsh plugin` 只是把参数转发给 profile 目录里的 pnpm，**不会自动拉取 Git 更新**。Atlas 因此内置了一个轻量检测：
+## 技术架构
 
-- Host 每 6 小时读取一次 GitHub 上的 `package.json` 版本（优先 GitHub API，失败回退 raw）；
-- 顶栏出现 `↑ vX.Y.Z` 表示有更新；
-- 检测只提示，不自动替换正在运行的 Host 代码；
-- 可用 `checkUpdates: false` 关闭该网络请求。
-
-更新插件：
-
-```bash
-# 在 profile 目录里重新解析 GitHub 依赖
-dsh plugin --profile web update dsh-atlas
-
-# 如果 pnpm 没有重新解析 Git 依赖，重新 add 一次
-dsh plugin --profile web add github:nononeundertsand/DSH-Atlas
-
-# 重启 DSH
-dsh web
-```
-
-发布新版本时，必须提升 `package.json` 的 `version`，否则检测不会认为有新版本：
-
-```bash
-npm run release:patch   # npm version patch + typecheck + build + smoke
-git add -A
-git commit -m "release: patch"
-git push origin main
-```
-
-> 如果想“完全自动安装”，可以在操作系统计划任务里定时执行 `dsh plugin --profile web update dsh-atlas`，但这不会热重启正在运行的 DSH；不建议在 Host 运行期间自动替换插件文件。推荐“检测 + 用户确认更新”。
-
-## 快速开始
-
-1. 打开 Atlas，输入第一个模块，例如「02 索引」。
-2. 点击节点进入对话，问「B+ 树为什么把数据放在叶子节点？」。
-3. 在回答下方点「分支」，把「页分裂」展开成子聊天。
-4. 子聊天里继续追问，然后点「提升为节点」，画布上多一个子节点。
-5. 回到主节点，点右上角「收口」；节点变绿，生成结论、要点、未解问题与掌握度。
-6. 再次打开该节点，先看到续接简报；点「重新打开」即可继续追问。
-7. 顶部搜索框可搜索节点、消息与收口卡。
-8. 在对话里用鼠标选中一个词或短语，松手后会弹出「AI 解释」，同时给出通用含义和当前语境下的含义。
-9. 顶栏「⚙ 设置」可调整卡片大小、对话面板宽度与字号；设置只保存在当前浏览器。
-
-## 工作原理
-
-```
-L0 画布   任务地图（数据库 8 个模块）
-L1 节点   模块对话（02 索引 → B+ 树）
-L2 标题   子问题（页分裂 / 聚簇索引）
-L3+       不再嵌套，改为「提升为节点」
-```
-
-- 画布负责**广度**，节点内标题负责**深度**。
-- 每个节点是独立的上下文边界：祖先节点只传递收口卡，不传完整 transcript。
-- 子聊天只携带「路径卡 + 父线程最近两轮 + 引用 + 自己的轮次」。
-- 关闭不等于删除，而是**收口**：生成一张卡，作为节点在树中的标识。
-- 提升为节点时复制子聊天消息与引用，父节点只保留一条引用关系，避免上下文污染。
-
-## 架构
+> 以下内容面向开发与二次开发；普通用户读完上面的「功能」「安装」「更新」即可使用。
 
 ```
 dsh-atlas/
@@ -166,18 +235,22 @@ dsh-atlas/
 ├─ scripts/build.mjs       # esbuild：Host ESM + 浏览器 __ModuleLoader__ 包装
 ├─ src/
 │  ├─ host/
-│  │  ├─ index.ts          # 插件入口：路由注册
-│  │  ├─ routes.ts         # /ext/atlas/*、JSON、SSE
-│  │  ├─ store.ts          # 工作区/节点/线程/消息/卡片文件存储
-│  │  ├─ context.ts        # 上下文组装与预算裁剪
+│  │  ├─ index.ts          # 插件入口、配置、路由注册
+│  │  ├─ routes.ts         # /ext/atlas/*、JSON、SSE、选中解释
+│  │  ├─ store.ts          # 工作区/节点/线程/消息/卡片/访问记录
+│  │  ├─ context.ts        # 上下文组装、预算裁剪、解释上下文
 │  │  ├─ closure.ts        # 收口卡生成、校验、降级
 │  │  ├─ actions.ts        # 提升为节点
-│  │  └─ model.ts          # LlmPort 适配：路由选择、流式、JSON
+│  │  ├─ model.ts          # LlmPort 适配：路由选择、流式、JSON
+│  │  └─ update.ts         # GitHub 版本检测
 │  ├─ client/
 │  │  ├─ index.tsx         # 注册 main 面板与 sidebar.panellist 图标
-│  │  ├─ AtlasApp.tsx      # 主面板、工作区、搜索、对话框
-│  │  ├─ Canvas.tsx        # 相机、平移缩放、拖拽、边、LOD
-│  │  ├─ ChatSheet.tsx     # 对话、目录轨、收口卡、子聊天
+│  │  ├─ AtlasApp.tsx      # 主面板、工作区、搜索、设置
+│  │  ├─ Canvas.tsx        # 相机、平移缩放、拖拽、边、LOD、子树收起
+│  │  ├─ ChatSheet.tsx     # 对话、目录轨、收口卡、子聊天、选中解释
+│  │  ├─ Mastery.tsx       # 掌握度颜色段与百分比
+│  │  ├─ format.ts         # 相对时间、时长、卡片记忆文案
+│  │  ├─ settings.ts       # 浏览器端界面设置
 │  │  ├─ api.ts            # HTTP + SSE 客户端
 │  │  ├─ markdown.tsx      # 轻量 Markdown 与标题提取
 │  │  └─ styles.ts         # 作用域化 CSS
@@ -194,7 +267,7 @@ dsh-atlas/
 ```
 ~/.dsh/atlas/workspaces/<workspace-id>/
   workspace.json           # 元数据、目标、rev
-  nodes.json               # 节点与位置
+  nodes.json               # 节点、位置、掌握度、上次打开与停留
   threads.json             # 主线程与子聊天元数据
   viewport.json            # 相机
   threads/<thread-id>.jsonl # 追加写消息
@@ -208,13 +281,19 @@ dsh-atlas/
 所有请求走同源 `/ext/atlas/*`，由 DSH `webServer` 承载：
 
 - `GET /bootstrap`：工作区列表与当前快照；
-- `GET /update`：GitHub 版本检测（只提示，不自动安装）；
+- `GET /update`：GitHub 版本检测；
 - `POST /nodes`、`PATCH /nodes/:id`、`DELETE /nodes/:id`；
 - `POST /nodes/:id/close`：收口；
+- `POST /nodes/:id/visit`：记录上次打开时间与停留时长；
 - `GET /threads/:id`：线程、消息、卡片、路径、子聊天；
 - `POST /threads/:id/turn`：SSE（`meta → delta* → done/error`）；
+- `POST /threads/:id/explain`：结合上下文解释选中文字；
 - `POST /threads/:id/promote`：提升为节点；
 - `GET /search?q=`：节点、消息、卡片搜索。
+
+SSE 事件顺序固定为 `meta → delta* → done/error`。页面刷新后会重新拉取完整线程，暂不支持断线续传。
+
+---
 
 ## 开发
 
@@ -227,7 +306,7 @@ npm run check        # 三者一起跑
 npm run dev          # Host watch（客户端改动后需再跑一次 build）
 ```
 
-`lib/` 是构建产物。为了让 `dsh plugin add <GitHub URL>` 对其他人直接可用，仓库会保留构建后的 `lib/`；修改源码后请运行 `npm run build`，并提交更新后的 `lib/`。
+`lib/` 是构建产物。为了让 `dsh plugin add github:owner/repo` 对其他人直接可用，仓库会保留构建后的 `lib/`；修改源码后请运行 `npm run build`，并提交更新后的 `lib/`。
 
 ### 浏览器插件协议
 
@@ -235,6 +314,19 @@ npm run dev          # Host watch（客户端改动后需再跑一次 build）
 - `lib/client.js` 由 esbuild 打成 CJS，再包进 `window.__ModuleLoader__.load({ id, factory })`；
 - React、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-*` 等由 DSH 平台模块表提供，不打进 bundle；
 - 面板注册在 `main` 的 `atlas` key，侧边栏图标注册在 `sidebar.panellist`。
+
+### 从源码安装
+
+```bash
+git clone https://github.com/nononeundertsand/DSH-Atlas.git
+cd DSH-Atlas
+npm install
+npm run check
+dsh plugin --profile web add .
+dsh web
+```
+
+---
 
 ## 兼容性
 
@@ -245,15 +337,20 @@ npm run dev          # Host watch（客户端改动后需再跑一次 build）
   - 无 `webServer`：插件不会加载（Atlas 需要 HTTP 路由）；
   - 无 `layout` / `slots`：浏览器半不会挂载。
 
+---
+
 ## Roadmap
 
 - [x] **M0** 静态原型
 - [x] **M1** 插件骨架 + 工作区 + 画布 + 节点 CRUD
 - [x] **M2** 对话面板 + Atlas-native 线程 + SSE + 收口
 - [x] **M3（基础版）** 子聊天 + 引用 + 提升 + 搜索
-- [ ] **M4** 复习（FSRS）+ 导出/导入 + 设置页
-- [ ] **M5** Agent mode（绑定 DSH session）+ 原生对话 portal
-- [ ] **M6** 开源发布：CI、截图回归、npm 发布
+- [x] **M4** 体验增强：掌握度、卡片记忆、界面设置、选中解释
+- [ ] **M5** 复习（FSRS）+ 导出/导入
+- [ ] **M6** Agent mode（绑定 DSH session）+ 原生对话 portal
+- [ ] **M7** 开源发布：CI、截图回归、npm 发布
+
+---
 
 ## 已知限制（MVP 有意收敛）
 
@@ -263,8 +360,11 @@ npm run dev          # Host watch（客户端改动后需再跑一次 build）
 - Markdown 渲染器覆盖标题、列表、引用、代码块与行内强调，不包含表格、脚注、数学公式。
 - SSE 不支持断线续传；页面刷新后会重新拉取完整线程。
 - 收口卡由模型生成；模型不可用时降级为基于最近回答的手动卡。
+- 选中解释依赖当前模型；长文本会被截断到 200 字以内。
 - 暂不支持多用户、CRDT、移动端。
 - 搜索为本地逐条匹配，面向 10k 消息以内；更大规模需要索引。
+
+---
 
 ## 隐私与安全
 
@@ -273,6 +373,8 @@ npm run dev          # Host watch（客户端改动后需再跑一次 build）
 - **路由边界**：`/ext/atlas/*` 不带额外鉴权，默认只在 DSH 的 loopback 监听下使用。若把 DSH 绑定到非回环地址，请在前面加反向代理鉴权。
 - **Markdown**：使用自绘渲染器，不执行内联脚本、iframe 或事件属性。
 - **模型上下文**：祖先节点只发送收口卡；节点边界是硬边界，不跨节点压缩。
+
+---
 
 ## 贡献
 
