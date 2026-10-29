@@ -202,6 +202,7 @@ dsh-atlas/
 所有请求走同源 `/ext/atlas/*`，由 DSH `webServer` 承载：
 
 - `GET /bootstrap`：工作区列表与当前快照；
+- `GET /update`：GitHub 版本检测（只提示，不自动安装）；
 - `POST /nodes`、`PATCH /nodes/:id`、`DELETE /nodes/:id`；
 - `POST /nodes/:id/close`：收口；
 - `GET /threads/:id`：线程、消息、卡片、路径、子聊天；
