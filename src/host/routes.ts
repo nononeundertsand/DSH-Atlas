@@ -7,7 +7,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import type { AtlasStore } from './store.js'
 import type { AtlasModel } from './model.js'
-import { buildChatContext } from './context.js'
+import { buildChatContext, buildExplainContext } from './context.js'
 import { generateClosure } from './closure.js'
 import { promoteSubthread } from './actions.js'
 import type {
@@ -18,11 +18,13 @@ import type {
   CreateNodeInput,
   CreateSubthreadInput,
   CreateWorkspaceInput,
+  ExplainInput,
   PromoteInput,
   TurnInput,
   UpdateInfo,
   UpdateNodeInput,
   Viewport,
+  VisitInput,
 } from '../shared/types.js'
 import { ATLAS_BASE, LIMITS } from '../shared/protocol.js'
 
@@ -160,6 +162,19 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
       const card = await generateClosure(deps.store, deps.model, node, threadId)
       return send(res, 200, { card, node: await deps.store.getNode(nodeId) })
     }
+
+    if (path.length === 3 && path[2] === 'visit') {
+      allow(method, ['POST'])
+      const body = await readJson<VisitInput>(req)
+      if (typeof body.durationMs !== 'number' || !Number.isFinite(body.durationMs) || body.durationMs < 0) {
+        throw new Error('E_BAD_REQUEST: durationMs 不合法')
+      }
+      const openedAt =
+        typeof body.openedAt === 'string' && !Number.isNaN(Date.parse(body.openedAt))
+          ? new Date(body.openedAt).toISOString()
+          : new Date().toISOString()
+      return send(res, 200, { node: await deps.store.recordVisit(nodeId, openedAt, body.durationMs) })
+    }
   }
 
   // /threads
@@ -194,6 +209,34 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
         position: body.position,
       })
       return send(res, 200, { node })
+    }
+
+    if (path.length === 3 && path[2] === 'explain') {
+      allow(method, ['POST'])
+      const body = await readJson<ExplainInput>(req)
+      const selected = body.text?.trim()
+      if (!selected) throw new Error('E_BAD_REQUEST: 没有选中文字')
+      if (selected.length > 200) throw new Error('E_BAD_REQUEST: 选中文字最多 200 字')
+
+      const snapshot = await deps.store.getThread(threadId)
+      const context = buildExplainContext({
+        workspace: snapshot.workspace,
+        node: snapshot.node,
+        path: snapshot.path,
+        messages: snapshot.messages,
+        text: selected,
+      })
+      const { value, model } = await deps.model.json<RawExplain>({
+        system: context.system,
+        messages: context.messages,
+        maxTokens: 800,
+      })
+      return send(res, 200, {
+        term: asText(value.term) ?? selected,
+        meaning: asText(value.meaning) ?? '模型没有给出通用含义。',
+        inContext: asText(value.inContext) ?? '模型没有给出当前语境下的解释。',
+        model,
+      })
     }
   }
 
@@ -324,6 +367,16 @@ function allow(method: string, methods: string[]): void {
 
 function decode(value: string): string {
   return decodeURIComponent(value)
+}
+
+interface RawExplain {
+  term?: unknown
+  meaning?: unknown
+  inContext?: unknown
+}
+
+function asText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function toApiError(error: unknown): ApiError {

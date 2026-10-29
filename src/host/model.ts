@@ -120,14 +120,52 @@ export class AtlasModel {
   }
 }
 
-/** 从模型输出中提取第一个 JSON 对象，容忍 ```json 围栏与前后说明。 */
+/** 从模型输出中提取第一个 JSON 对象，容忍 ```json 围栏、前后说明与截断。 */
 export function parseJson<T>(text: string): T {
+  const candidates: string[] = []
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text)
+  if (fence?.[1]) candidates.push(fence[1])
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
-  if (start < 0 || end <= start) throw new Error('E_VALIDATION: 模型没有返回 JSON 对象')
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as T
-  } catch {
-    throw new Error('E_VALIDATION: 模型返回的 JSON 无法解析')
+  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1))
+  candidates.push(text)
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as T
+    } catch {
+      try {
+        return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1')) as T
+      } catch {
+        // 继续尝试下一个候选
+      }
+    }
   }
+
+  const salvaged = salvageFields(text)
+  if (salvaged) return salvaged as T
+  if (start < 0 || end <= start) throw new Error('E_VALIDATION: 模型没有返回 JSON 对象')
+  throw new Error('E_VALIDATION: 模型返回的 JSON 无法解析')
+}
+
+/** 输出被截断时，按字段名捞出已经写出的字符串。 */
+function salvageFields(text: string): Record<string, string> | undefined {
+  const pick = (key: string): string | undefined => {
+    const matched = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(text)
+    if (!matched?.[1]) return undefined
+    const value = matched[1]
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim()
+    return value || undefined
+  }
+  const term = pick('term')
+  const meaning = pick('meaning')
+  const inContext = pick('inContext')
+  if (!term && !meaning && !inContext) return undefined
+  return { ...(term ? { term } : {}), ...(meaning ? { meaning } : {}), ...(inContext ? { inContext } : {}) }
 }

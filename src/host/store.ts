@@ -284,6 +284,22 @@ export class AtlasStore {
     return (await this.findNode(nodeId)).node
   }
 
+  async recordVisit(nodeId: string, openedAt: string, durationMs: number): Promise<AtlasNode> {
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId)
+      const next: AtlasNode = {
+        ...node,
+        lastOpenedAt: openedAt,
+        lastDurationMs: clamp(Math.round(durationMs), 0, 12 * 60 * 60 * 1000),
+        openCount: (node.openCount ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+      }
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map((item) => (item.id === nodeId ? next : item)))
+      await this.touch(workspaceId)
+      return next
+    })
+  }
+
   async listSubthreads(nodeId: string): Promise<Thread[]> {
     const { workspaceId } = await this.findNode(nodeId)
     const threads = (await this.readJson<Thread[]>(this.threadsFile(workspaceId))) ?? []

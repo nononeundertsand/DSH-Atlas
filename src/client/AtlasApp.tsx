@@ -1,9 +1,10 @@
 /** Atlas 主面板：把画布、对话面板、工作区与搜索串成一个可用的最小闭环。 */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AtlasNode, Point, SearchHit, ThreadSnapshot, UpdateInfo, Viewport, Workspace, WorkspaceSnapshot } from '../shared/types.js'
 import { api } from './api.js'
 import { Canvas } from './Canvas.js'
 import { ChatSheet } from './ChatSheet.js'
+import { DEFAULT_SETTINGS, loadSettings, normalize, saveSettings, type AtlasSettings } from './settings.js'
 
 export function AtlasApp({ onExit }: { onExit?: () => void }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -21,7 +22,16 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searchOpen, setSearchOpen] = useState(false)
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [settings, setSettings] = useState<AtlasSettings>(() => loadSettings())
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const visitRef = useRef<{ nodeId: string; openedAt: number } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
+
+  const appStyle = {
+    '--atlas-card-scale': settings.cardScale,
+    '--atlas-sheet-width': `${settings.chatWidth}px`,
+    '--atlas-chat-font-size': `${settings.chatFontSize}px`,
+  } as CSSProperties
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -77,20 +87,63 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
     return () => window.clearTimeout(timer)
   }, [search, snapshot?.workspace.id])
 
+  const flushVisit = useCallback((keepalive = false) => {
+    const visit = visitRef.current
+    if (!visit) return undefined
+    visitRef.current = null
+    return api
+      .recordVisit(
+        visit.nodeId,
+        { openedAt: new Date(visit.openedAt).toISOString(), durationMs: Date.now() - visit.openedAt },
+        keepalive,
+      )
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    const onUnload = () => {
+      void flushVisit(true)
+    }
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [flushVisit])
+
   const openNode = useCallback(
     async (node: AtlasNode) => {
+      void flushVisit()
       setThreadLoading(true)
       try {
         const result = await api.getThread(node.threadId)
         setThread(result.snapshot)
+        visitRef.current = { nodeId: node.id, openedAt: Date.now() }
       } catch (reason) {
         showToast(reason instanceof Error ? reason.message : '打开节点失败')
       } finally {
         setThreadLoading(false)
       }
     },
-    [showToast],
+    [flushVisit, showToast],
   )
+
+  const closeSheet = useCallback(() => {
+    setThread(null)
+    const task = flushVisit()
+    if (task) void task.then(() => reload()).catch(() => undefined)
+  }, [flushVisit, reload])
+
+  const updateSettings = (patch: Partial<AtlasSettings>) => {
+    setSettings((current) => {
+      const next = normalize({ ...current, ...patch })
+      saveSettings(next)
+      return next
+    })
+  }
+
+  const resetSettings = () => {
+    const next = { ...DEFAULT_SETTINGS }
+    setSettings(next)
+    saveSettings(next)
+  }
 
   const createNode = async (title: string, parentId: string | null) => {
     if (!snapshot) return
@@ -209,10 +262,11 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
   }
 
   return (
-    <div className="atlas-app">
+    <div className="atlas-app" style={appStyle}>
       <Canvas
         key={snapshot.workspace.id}
         workspaceId={snapshot.workspace.id}
+        cardScale={settings.cardScale}
         nodes={snapshot.nodes}
         viewport={snapshot.viewport}
         onOpen={(node) => void openNode(node)}
@@ -299,6 +353,9 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
           ) : null}
         </div>
 
+        <button type="button" className="atlas-btn" onClick={() => setSettingsOpen(true)} title="界面设置">
+          ⚙ 设置
+        </button>
         <button
           type="button"
           className="atlas-btn primary"
@@ -347,10 +404,11 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
         <ChatSheet
           key={thread.thread.id}
           snapshot={thread}
-          onBack={() => setThread(null)}
+          onBack={closeSheet}
           onNodeChanged={updateNodeLocal}
           onSnapshotStale={() => void reload().catch(() => undefined)}
           onDeleted={() => {
+            visitRef.current = null
             setThread(null)
             void reload().catch(() => undefined)
           }}
@@ -395,6 +453,62 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <div
+          className="atlas-dialog-backdrop"
+          onMouseDown={(event) => event.target === event.currentTarget && setSettingsOpen(false)}
+        >
+          <div className="atlas-dialog atlas-settings">
+            <h3>Atlas 界面设置</h3>
+            <label className="atlas-setting">
+              <span>节点卡片大小</span>
+              <output>{Math.round(settings.cardScale * 100)}%</output>
+              <input
+                type="range"
+                min={85}
+                max={135}
+                step={5}
+                value={Math.round(settings.cardScale * 100)}
+                onChange={(event) => updateSettings({ cardScale: Number(event.target.value) / 100 })}
+              />
+            </label>
+            <label className="atlas-setting">
+              <span>对话面板宽度</span>
+              <output>{settings.chatWidth}px</output>
+              <input
+                type="range"
+                min={820}
+                max={1400}
+                step={20}
+                value={settings.chatWidth}
+                onChange={(event) => updateSettings({ chatWidth: Number(event.target.value) })}
+              />
+            </label>
+            <label className="atlas-setting">
+              <span>对话字体大小</span>
+              <output>{settings.chatFontSize}px</output>
+              <input
+                type="range"
+                min={13}
+                max={20}
+                step={1}
+                value={settings.chatFontSize}
+                onChange={(event) => updateSettings({ chatFontSize: Number(event.target.value) })}
+              />
+            </label>
+            <p className="atlas-settings-note">设置保存在当前浏览器，不影响其他人。</p>
+            <div className="atlas-dialog-actions">
+              <button type="button" className="atlas-btn" onClick={resetSettings}>
+                恢复默认
+              </button>
+              <button type="button" className="atlas-btn primary" onClick={() => setSettingsOpen(false)}>
+                完成
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 

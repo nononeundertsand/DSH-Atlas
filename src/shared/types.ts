@@ -43,6 +43,12 @@ export interface AtlasNode {
   updatedAt: string
   closedAt?: string
   dueAt?: string
+  /** 最近一次打开对话的时间。 */
+  lastOpenedAt?: string
+  /** 最近一次打开对话的持续时间（毫秒）。 */
+  lastDurationMs?: number
+  /** 打开次数。 */
+  openCount?: number
 }
 
 export interface Thread {
@@ -183,6 +189,22 @@ export interface CreateSubthreadInput {
   title: string
   anchorMessageId?: string
   quote?: MessageQuote
+}
+
+export interface VisitInput {
+  openedAt: string
+  durationMs: number
+}
+
+export interface ExplainInput {
+  text: string
+}
+
+export interface ExplainResult {
+  term: string
+  meaning: string
+  inContext: string
+  model: string
 }
 
 export interface SearchInput {

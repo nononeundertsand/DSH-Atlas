@@ -9,6 +9,7 @@ import type {
   ClosureCard,
   CreateNodeInput,
   CreateSubthreadInput,
+  ExplainResult,
   MessageQuote,
   SearchHit,
   Thread,
@@ -17,6 +18,7 @@ import type {
   UpdateInfo,
   UpdateNodeInput,
   Viewport,
+  VisitInput,
   Workspace,
   WorkspaceSnapshot,
 } from '../shared/types.js'
@@ -107,6 +109,20 @@ export const api = {
     request<{ card: ClosureCard; node: AtlasNode }>(ROUTES.closeNode(nodeId), {
       method: 'POST',
       body: JSON.stringify({ threadId }),
+    }),
+
+  recordVisit: (nodeId: string, input: VisitInput, keepalive = false) =>
+    request<{ node: AtlasNode }>(ROUTES.visitNode(nodeId), {
+      method: 'POST',
+      body: JSON.stringify(input),
+      keepalive,
+    }),
+
+  explain: (threadId: string, text: string, signal?: AbortSignal) =>
+    request<ExplainResult>(ROUTES.explain(threadId), {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      signal,
     }),
 
   getThread: (threadId: string) =>

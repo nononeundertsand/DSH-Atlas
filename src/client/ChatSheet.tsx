@@ -7,12 +7,15 @@ import type {
   AtlasMessage,
   AtlasNode,
   ClosureCard,
+  ExplainResult,
   MessageQuote,
   SubthreadSnapshot,
   ThreadSnapshot,
 } from '../shared/types.js'
 import { api, streamTurn } from './api.js'
 import { Markdown, extractHeadings } from './markdown.js'
+import { Mastery } from './Mastery.js'
+import { formatDuration, formatRelativeTime } from './format.js'
 
 export interface ChatSheetProps {
   snapshot: ThreadSnapshot
@@ -21,6 +24,15 @@ export interface ChatSheetProps {
   onSnapshotStale: () => void
   onDeleted: (nodeId: string) => void
   onToast: (message: string) => void
+}
+
+interface ExplainState {
+  text: string
+  x: number
+  y: number
+  loading: boolean
+  result?: ExplainResult
+  error?: string
 }
 
 export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, onDeleted, onToast }: ChatSheetProps) {
@@ -39,8 +51,12 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const autoScroll = useRef(true)
   const sendingRef = useRef(false)
+  const explainAbortRef = useRef<AbortController | null>(null)
+  const [explain, setExplain] = useState<ExplainState | null>(null)
 
   useEffect(() => {
+    explainAbortRef.current?.abort()
+    setExplain(null)
     setNode(snapshot.node)
     setTitle(snapshot.node.title)
     setMessages(snapshot.messages)
@@ -54,11 +70,15 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onBack()
+      if (event.key !== 'Escape') return
+      if (explain) setExplain(null)
+      else onBack()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onBack])
+  }, [onBack, explain])
+
+  useEffect(() => () => explainAbortRef.current?.abort(), [])
 
   useEffect(() => {
     if (!autoScroll.current) return
@@ -259,6 +279,43 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
     }
   }
 
+  const captureSelection = () => {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed) return
+    const text = selection.toString().trim().replace(/\s+/g, ' ')
+    if (text.length < 2 || text.length > 200) return
+    const anchor = selection.anchorNode
+    if (!anchor || !threadRef.current?.contains(anchor)) return
+
+    const rect = selection.getRangeAt(0).getBoundingClientRect()
+    const x = Math.max(12, Math.min(rect.left, window.innerWidth - 360))
+    const y = Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 300))
+    setExplain({ text, x, y, loading: true })
+
+    explainAbortRef.current?.abort()
+    const controller = new AbortController()
+    explainAbortRef.current = controller
+    api
+      .explain(snapshot.thread.id, text, controller.signal)
+      .then((result) =>
+        setExplain((current) =>
+          current && current.text === text ? { ...current, loading: false, result } : current,
+        ),
+      )
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        setExplain((current) =>
+          current && current.text === text
+            ? {
+                ...current,
+                loading: false,
+                error: error instanceof Error ? error.message : '解释失败',
+              }
+            : current,
+        )
+      })
+  }
+
   const remove = async () => {
     if (!window.confirm(`删除节点「${node.title}」及其所有子节点？`)) return
     try {
@@ -292,19 +349,14 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
               <span>{statusLabel(node.status)}</span>
               <span>·</span>
               <span>{turnCount} 轮</span>
+              {node.lastOpenedAt ? (
+                <>
+                  <span>·</span>
+                  <span>上次打开 {formatRelativeTime(node.lastOpenedAt)} · 停留 {formatDuration(node.lastDurationMs)}</span>
+                </>
+              ) : null}
               <span>·</span>
-              <span className="atlas-mastery" title="点击设置掌握度">
-                {Array.from({ length: 5 }, (_, index) => (
-                  <button
-                    key={index}
-                    type="button"
-                    onClick={() => void setMastery(index + 1 === node.mastery ? index : index + 1)}
-                    style={{ border: 0, padding: 0, background: 'transparent', cursor: 'pointer' }}
-                  >
-                    <i className={index < node.mastery ? 'on' : ''} style={{ display: 'block', width: 5, height: 5, borderRadius: 2, background: index < node.mastery ? 'var(--atlas-green)' : '#2b3a4d' }} />
-                  </button>
-                ))}
-              </span>
+              <Mastery value={node.mastery} onChange={setMastery} />
             </div>
           </div>
           <div className="atlas-head-actions">
@@ -352,6 +404,10 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
           <div
             className="atlas-thread"
             ref={threadRef}
+            onMouseUp={captureSelection}
+            onKeyUp={(event) => {
+              if (event.key === 'Shift' || event.shiftKey) captureSelection()
+            }}
             onScroll={(event) => {
               const element = event.currentTarget
               autoScroll.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
@@ -514,6 +570,40 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
           </div>
         </footer>
       </div>
+      {explain ? <ExplainPopover state={explain} onClose={() => setExplain(null)} /> : null}
+    </div>
+  )
+}
+
+function ExplainPopover({ state, onClose }: { state: ExplainState; onClose: () => void }) {
+  return (
+    <div
+      className="atlas-explain"
+      style={{ left: state.x, top: state.y }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <div className="atlas-explain-head">
+        <span>AI 解释 · {state.text.length > 24 ? `${state.text.slice(0, 24)}…` : state.text}</span>
+        <button type="button" onClick={onClose} aria-label="关闭解释">
+          ✕
+        </button>
+      </div>
+      {state.loading ? (
+        <div className="atlas-explain-loading">
+          <span className="atlas-spinner" /> 正在结合上下文解释…
+        </div>
+      ) : null}
+      {state.error ? <div className="atlas-explain-error">{state.error}</div> : null}
+      {state.result ? (
+        <>
+          <div className="atlas-explain-term">{state.result.term}</div>
+          <p className="atlas-explain-meaning">{state.result.meaning}</p>
+          <div className="atlas-explain-context">
+            <b>在当前语境中</b>
+            <p>{state.result.inContext}</p>
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }

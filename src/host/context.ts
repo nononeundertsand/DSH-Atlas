@@ -108,6 +108,38 @@ ${transcript || '（还没有对话）'}`
   }
 }
 
+/** 选中文字的解释上下文：只带最近几轮，避免把整段对话重复送给模型。 */
+export function buildExplainContext(input: {
+  workspace: Workspace
+  node: AtlasNode
+  path: PathBrief[]
+  messages: AtlasMessage[]
+  text: string
+}): { system: string; messages: LlmRequestMessage[] } {
+  const recent = trimMessages(input.messages, 6_000, 8)
+    .map((message) => `${message.role === 'user' ? '用户' : '助手'}：${message.content.slice(0, 1_200)}`)
+    .join('\n\n')
+
+  const system = `你是 Atlas 的术语解释助手。结合当前节点与对话上下文，解释用户选中的词或短语。
+只解释选中内容，不展开无关话题。输出严格 JSON：
+{"term":string,"meaning":string,"inContext":string}
+meaning 是这个词的通用含义，1–2 句；inContext 是它在这段对话里的具体含义，1–2 句。`
+
+  const user = `节点：${input.node.title}
+路径：${input.path.map((item) => item.title).join(' › ') || input.node.title}
+地图目标：${input.workspace.goal ?? '（未填写）'}
+
+最近对话：
+${recent || '（暂无）'}
+
+选中文字：${input.text}`
+
+  return {
+    system,
+    messages: [{ role: 'user', content: [{ type: 'text', text: user }], source: { kind: 'user' } }],
+  }
+}
+
 /** 保留最近 N 条，并从最旧的开始压到字符预算内。 */
 export function trimMessages(messages: AtlasMessage[], budget: number, maxCount: number): AtlasMessage[] {
   const recent = messages.filter((message) => message.role !== 'system').slice(-maxCount)

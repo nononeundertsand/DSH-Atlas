@@ -13,10 +13,12 @@ export const ROUTES = {
   nodes: `${ATLAS_BASE}/nodes`,
   node: (id: string) => `${ATLAS_BASE}/nodes/${id}`,
   closeNode: (id: string) => `${ATLAS_BASE}/nodes/${id}/close`,
+  visitNode: (id: string) => `${ATLAS_BASE}/nodes/${id}/visit`,
   threads: `${ATLAS_BASE}/threads`,
   thread: (id: string) => `${ATLAS_BASE}/threads/${id}`,
   turn: (id: string) => `${ATLAS_BASE}/threads/${id}/turn`,
   promote: (id: string) => `${ATLAS_BASE}/threads/${id}/promote`,
+  explain: (id: string) => `${ATLAS_BASE}/threads/${id}/explain`,
   search: `${ATLAS_BASE}/search`,
 } as const
 

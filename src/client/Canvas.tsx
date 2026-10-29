@@ -4,12 +4,15 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AtlasNode, Point, Viewport } from '../shared/types.js'
+import { Mastery } from './Mastery.js'
+import { formatVisit } from './format.js'
 
 const NODE_W = 288
 const NODE_H = 104
 
 export interface CanvasProps {
   workspaceId: string
+  cardScale: number
   nodes: AtlasNode[]
   viewport: Viewport
   onOpen: (node: AtlasNode) => void
@@ -28,12 +31,14 @@ interface DragState {
   moved: boolean
 }
 
-export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
+export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<Viewport>(viewport)
   const [localNodes, setLocalNodes] = useState(nodes)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(workspaceId))
   const [panning, setPanning] = useState(false)
+  const nodeW = NODE_W * cardScale
+  const nodeH = NODE_H * cardScale
   const panRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const suppressClick = useRef(false)
@@ -89,8 +94,8 @@ export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMov
     const rect = stage.getBoundingClientRect()
     const minX = Math.min(...visibleNodes.map((node) => node.position.x))
     const minY = Math.min(...visibleNodes.map((node) => node.position.y))
-    const maxX = Math.max(...visibleNodes.map((node) => node.position.x + NODE_W))
-    const maxY = Math.max(...visibleNodes.map((node) => node.position.y + NODE_H))
+    const maxX = Math.max(...visibleNodes.map((node) => node.position.x + nodeW))
+    const maxY = Math.max(...visibleNodes.map((node) => node.position.y + nodeH))
     const pad = 70
     const zoom = clamp(
       Math.min((rect.width - pad * 2) / (maxX - minX), (rect.height - pad * 2) / (maxY - minY), 1.15),
@@ -104,7 +109,7 @@ export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMov
     }
     setCamera(next)
     persist(next)
-  }, [visibleNodes, persist])
+  }, [visibleNodes, nodeW, nodeH, persist])
 
   const lod = camera.zoom >= 0.85 ? '' : camera.zoom >= 0.5 ? 'lod-mid' : camera.zoom >= 0.3 ? 'lod-far' : 'lod-map'
 
@@ -149,10 +154,10 @@ export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMov
           {visibleNodes.map((node) => {
             const parent = node.parentId ? visibleNodes.find((item) => item.id === node.parentId) : undefined
             if (!parent) return null
-            const x1 = parent.position.x + NODE_W
-            const y1 = parent.position.y + NODE_H / 2
+            const x1 = parent.position.x + nodeW
+            const y1 = parent.position.y + nodeH / 2
             const x2 = node.position.x
-            const y2 = node.position.y + NODE_H / 2
+            const y2 = node.position.y + nodeH / 2
             const mid = (x1 + x2) / 2
             const active = node.status === 'active'
             return (
@@ -224,11 +229,12 @@ export function Canvas({ workspaceId, nodes, viewport, onOpen, onAddChild, onMov
             <div className="atlas-node-meta">
               <span className="atlas-status-dot" />
               <span>{statusLabel(node.status)}</span>
-              <span className="atlas-mastery">
-                {Array.from({ length: 5 }, (_, index) => (
-                  <i key={index} className={index < node.mastery ? 'on' : ''} />
-                ))}
-              </span>
+              {formatVisit(node) ? (
+                <span className="atlas-node-visit" title={formatVisit(node)}>
+                  {formatVisit(node)}
+                </span>
+              ) : null}
+              <Mastery value={node.mastery} compact />
             </div>
             <div className="atlas-node-actions">
               {childCount > 0 ? (
