@@ -80,7 +80,10 @@ L3+       不再嵌套，改为「提升为节点」
 
 ### 亮色与暗色
 
-![Atlas dark theme](docs/assets/canvas-dark.png)
+<p align="center">
+  <img src="docs/assets/canvas-dark.png" alt="Atlas 暗色画布" width="49%" />
+  <img src="docs/assets/chat-dark.png" alt="Atlas 暗色对话" width="49%" />
+</p>
 
 *暗色主题跟随 DSH 的配色 token，画布、卡片、对话面板自动切换。*
 
