@@ -10,6 +10,7 @@ import { ATLAS_BASE } from '../shared/protocol.js'
 import { AtlasStore } from './store.js'
 import { AtlasModel } from './model.js'
 import { createAtlasRouter } from './routes.js'
+import { UpdateChecker } from './update.js'
 
 export interface AtlasConfig {
   /** 留空时自动选择第一个可用 provider。 */
@@ -19,6 +20,11 @@ export interface AtlasConfig {
   /** 覆盖 ~/.dsh/atlas，主要用于测试。 */
   dataDir?: string
   maxTokens?: number
+  /** 是否检测 GitHub 新版本；默认开启，可设为 false 关闭。 */
+  checkUpdates?: boolean
+  /** 默认 nononeundertsand/DSH-Atlas。 */
+  updateRepo?: string
+  updateBranch?: string
 }
 
 export const inject = ['webServer', 'llm', 'agentDefaultModel']
@@ -26,11 +32,13 @@ export const inject = ['webServer', 'llm', 'agentDefaultModel']
 export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
   const store = new AtlasStore(config.dataDir)
   const model = new AtlasModel(ctx.llm, config, () => ctx.agentDefaultModel?.currentSelection())
+  const updates = new UpdateChecker(config)
   const router = createAtlasRouter({
     store,
     model,
     dataDir: store.location,
     modelHint: config.model ?? 'auto',
+    checkUpdate: (force) => updates.check(force),
   })
 
   ctx.effect(

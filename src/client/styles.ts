@@ -121,6 +121,8 @@ export const ATLAS_CSS = String.raw`
 .atlas-brand-name{font-size:13px;font-weight:650;letter-spacing:.2px;color:var(--atlas-text)}
 .atlas-brand-sub{font-size:10px;color:var(--atlas-text-3)}
 .atlas-spacer{flex:1}
+.atlas-update{height:32px;padding:0 10px;border-radius:9px;border:1px solid color-mix(in srgb,var(--atlas-accent) 38%,var(--atlas-border));background:color-mix(in srgb,var(--atlas-accent) 10%,var(--atlas-surface));color:var(--atlas-accent);font-size:12px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:5px;transition:background .15s,border-color .15s}
+.atlas-update:hover{background:color-mix(in srgb,var(--atlas-accent) 17%,var(--atlas-surface));border-color:color-mix(in srgb,var(--atlas-accent) 55%,var(--atlas-border))}
 .atlas-btn{height:32px;padding:0 11px;border-radius:9px;border:1px solid var(--atlas-border);background:var(--atlas-surface);color:var(--atlas-text-2);font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,color .15s}
 .atlas-btn:hover{background:var(--atlas-surface-2);border-color:var(--atlas-border-strong);color:var(--atlas-text)}
 .atlas-btn.primary{background:var(--atlas-primary-fill);color:var(--atlas-on-primary);border-color:var(--atlas-primary-fill);font-weight:600}

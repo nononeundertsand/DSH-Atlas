@@ -20,6 +20,7 @@ import type {
   CreateWorkspaceInput,
   PromoteInput,
   TurnInput,
+  UpdateInfo,
   UpdateNodeInput,
   Viewport,
 } from '../shared/types.js'
@@ -46,6 +47,7 @@ export interface RouterDeps {
   model: AtlasModel
   dataDir: string
   modelHint: string
+  checkUpdate: (force?: boolean) => Promise<UpdateInfo>
 }
 
 export function createAtlasRouter(deps: RouterDeps) {
@@ -68,6 +70,12 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
   }
   const path = segments.slice(2)
   const method = (req.method ?? 'GET').toUpperCase()
+
+  // GET /update ─ 版本检测（不自动安装）
+  if (path.length === 1 && path[0] === 'update') {
+    allow(method, ['GET'])
+    return send(res, 200, await deps.checkUpdate(url.searchParams.get('force') === '1'))
+  }
 
   // GET /bootstrap ─ 首次进入：工作区列表 + 当前快照
   if (path.length === 1 && path[0] === 'bootstrap') {

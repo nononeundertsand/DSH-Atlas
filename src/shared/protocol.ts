@@ -6,6 +6,7 @@ export const ATLAS_BASE = '/ext/atlas'
 
 export const ROUTES = {
   bootstrap: `${ATLAS_BASE}/bootstrap`,
+  update: `${ATLAS_BASE}/update`,
   workspaces: `${ATLAS_BASE}/workspaces`,
   workspace: (id: string) => `${ATLAS_BASE}/workspaces/${id}`,
   viewport: (id: string) => `${ATLAS_BASE}/workspaces/${id}/viewport`,

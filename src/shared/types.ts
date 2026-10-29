@@ -206,6 +206,16 @@ export interface ApiError {
   message: string
 }
 
+/** GitHub 版本检测结果；失败时 updateAvailable 保持 false。 */
+export interface UpdateInfo {
+  currentVersion: string
+  latestVersion?: string
+  updateAvailable: boolean
+  url: string
+  checkedAt: string
+  error?: string
+}
+
 /** SSE 帧。meta → delta* → done/error。 */
 export type AtlasEvent =
   | { event: 'meta'; data: { threadId: string; messageId: string; model: string } }

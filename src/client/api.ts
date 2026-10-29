@@ -14,6 +14,7 @@ import type {
   Thread,
   ThreadSnapshot,
   TurnInput,
+  UpdateInfo,
   UpdateNodeInput,
   Viewport,
   Workspace,
@@ -66,6 +67,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   bootstrap: () => request<BootstrapPayload>(ROUTES.bootstrap),
+
+  checkUpdate: () => request<UpdateInfo>(ROUTES.update),
 
   createWorkspace: (name: string, goal?: string) =>
     request<{ workspace: Workspace; snapshot: WorkspaceSnapshot; workspaces: Workspace[] }>(ROUTES.workspaces, {

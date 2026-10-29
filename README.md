@@ -32,6 +32,7 @@ DSH-Atlas 是 **DeepSeek Harness** 的插件：把线性对话组织为一张可
 | 无限画布：平移、缩放、拖拽、适配、语义缩放 | ✅ |
 | 主题：跟随 DSH 亮/暗配色与字体 token，边缘清晰无重模糊 | ✅ |
 | 节点 CRUD：新建根/子节点、重命名、移动、删除、收起/展开子树 | ✅ |
+| 更新检测：读取 GitHub 版本，顶栏提示新版本 | ✅ |
 | 对话面板：SSE 流式回答、Markdown 基础排版、目录轨 | ✅ |
 | 子聊天：从任意回答分支、继续追问、提升为节点 | ✅ |
 | 收口卡：模型生成、失败降级、掌握度、未解问题 | ✅ |
@@ -76,7 +77,7 @@ dsh web
 
 ### 可选配置
 
-在 profile 的 `cordis.patch.yml` 中覆盖默认模型或数据目录：
+在 profile 的 `cordis.patch.yml` 中覆盖默认模型、数据目录或更新检测：
 
 ```yaml
 - id: atlas
@@ -85,10 +86,45 @@ dsh web
     model: deepseek-flash
     # dataDir: D:/atlas-data
     # maxTokens: 1600
+    # checkUpdates: false
+    # updateRepo: nononeundertsand/DSH-Atlas
 ```
 
 不填 `provider` / `model` 时，Atlas 自动选择第一个可用 provider 的模型。
 如果没有可用模型，对话会返回明确的 `E_AUTH` / `E_MODEL` 错误，画布与收口降级仍可用。
+
+## 更新与自动检测
+
+DSH 的 `dsh plugin` 只是把参数转发给 profile 目录里的 pnpm，**不会自动拉取 Git 更新**。Atlas 因此内置了一个轻量检测：
+
+- Host 每 6 小时读取一次 GitHub 上的 `package.json` 版本（优先 GitHub API，失败回退 raw）；
+- 顶栏出现 `↑ vX.Y.Z` 表示有更新；
+- 检测只提示，不自动替换正在运行的 Host 代码；
+- 可用 `checkUpdates: false` 关闭该网络请求。
+
+更新插件：
+
+```bash
+# 在 profile 目录里重新解析 GitHub 依赖
+dsh plugin --profile web update dsh-atlas
+
+# 如果 pnpm 没有重新解析 Git 依赖，重新 add 一次
+dsh plugin --profile web add github:nononeundertsand/DSH-Atlas
+
+# 重启 DSH
+dsh web
+```
+
+发布新版本时，必须提升 `package.json` 的 `version`，否则检测不会认为有新版本：
+
+```bash
+npm run release:patch   # npm version patch + typecheck + build + smoke
+git add -A
+git commit -m "release: patch"
+git push origin main
+```
+
+> 如果想“完全自动安装”，可以在操作系统计划任务里定时执行 `dsh plugin --profile web update dsh-atlas`，但这不会热重启正在运行的 DSH；不建议在 Host 运行期间自动替换插件文件。推荐“检测 + 用户确认更新”。
 
 ## 快速开始
 
@@ -225,7 +261,7 @@ npm run dev          # Host watch（客户端改动后需再跑一次 build）
 
 ## 隐私与安全
 
-- **本地优先**：工作区存储在 `~/.dsh/atlas`，除模型 provider 外不发网络请求。
+- **本地优先**：工作区存储在 `~/.dsh/atlas`；除模型 provider 与可关闭的 GitHub 版本检查外，不发网络请求。
 - **不遥测**：插件不采集消息内容；日志只打印工作区路径。
 - **路由边界**：`/ext/atlas/*` 不带额外鉴权，默认只在 DSH 的 loopback 监听下使用。若把 DSH 绑定到非回环地址，请在前面加反向代理鉴权。
 - **Markdown**：使用自绘渲染器，不执行内联脚本、iframe 或事件属性。

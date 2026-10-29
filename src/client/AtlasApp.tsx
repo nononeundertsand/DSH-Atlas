@@ -1,6 +1,6 @@
 /** Atlas 主面板：把画布、对话面板、工作区与搜索串成一个可用的最小闭环。 */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AtlasNode, Point, SearchHit, ThreadSnapshot, Viewport, Workspace, WorkspaceSnapshot } from '../shared/types.js'
+import type { AtlasNode, Point, SearchHit, ThreadSnapshot, UpdateInfo, Viewport, Workspace, WorkspaceSnapshot } from '../shared/types.js'
 import { api } from './api.js'
 import { Canvas } from './Canvas.js'
 import { ChatSheet } from './ChatSheet.js'
@@ -20,6 +20,7 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
   const [search, setSearch] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searchOpen, setSearchOpen] = useState(false)
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const showToast = useCallback((message: string) => {
@@ -48,6 +49,19 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
       alive = false
     }
   }, [reload])
+
+  useEffect(() => {
+    let alive = true
+    api
+      .checkUpdate()
+      .then((info) => {
+        if (alive && info.updateAvailable) setUpdate(info)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!search.trim() || !snapshot) {
@@ -218,6 +232,18 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
             <div className="atlas-brand-sub">{snapshot.nodes.length} 个节点 · {snapshot.nodes.filter((node) => node.status === 'closed').length} 已收口</div>
           </div>
         </div>
+
+        {update ? (
+          <a
+            className="atlas-update"
+            href={update.url}
+            target="_blank"
+            rel="noreferrer"
+            title={`新版本 ${update.latestVersion}：运行 dsh plugin --profile web update dsh-atlas 后重启 DSH`}
+          >
+            ↑ v{update.latestVersion}
+          </a>
+        ) : null}
 
         <select className="atlas-select" value={snapshot.workspace.id} onChange={(event) => void switchWorkspace(event.target.value)} title="切换工作区">
           {workspaces.map((workspace) => (

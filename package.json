@@ -1,6 +1,6 @@
 {
   "name": "dsh-atlas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "把对话长成一张地图 · A spatial workspace for long conversations, as a DeepSeek Harness plugin",
   "type": "module",
   "license": "MIT",
@@ -38,6 +38,7 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node tests/smoke.mjs",
     "check": "npm run typecheck && npm run build && npm run smoke",
+    "release:patch": "npm version patch --no-git-tag-version && npm run check",
     "dev": "node scripts/build.mjs --watch"
   },
   "dependencies": {
