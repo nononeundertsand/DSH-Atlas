@@ -42,6 +42,8 @@ L3+       不再嵌套，改为「提升为节点」
 
 ![Atlas canvas](docs/assets/canvas.png)
 
+*画布：节点结构、上次打开时间与掌握度颜色段，一眼看清当前地图。*
+
 ---
 
 ## 功能一览
@@ -65,9 +67,22 @@ L3+       不再嵌套，改为「提升为节点」
 
 ![Atlas chat](docs/assets/chat.png)
 
-### 子聊天与提升
+*纸张式对话：目录轨、流式回答、掌握度与收口入口都在同一页。*
 
-![Atlas subchat](docs/assets/subchat.png)
+### 选中解释与界面设置
+
+<p align="center">
+  <img src="docs/assets/explain.png" alt="选中文字后的 AI 上下文解释" width="49%" />
+  <img src="docs/assets/settings.png" alt="Atlas 界面设置" width="49%" />
+</p>
+
+*左侧：选中文字，结合节点与最近对话解释；右侧：调整卡片大小、对话宽度与字号。*
+
+### 亮色与暗色
+
+![Atlas dark theme](docs/assets/canvas-dark.png)
+
+*暗色主题跟随 DSH 的配色 token，画布、卡片、对话面板自动切换。*
 
 ---
 
