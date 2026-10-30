@@ -44,7 +44,8 @@ export const ATLAS_CSS = String.raw`
 .atlas-grid{position:absolute;inset:0;pointer-events:none;
   background-image:radial-gradient(circle,color-mix(in srgb,var(--atlas-text-3) 30%,transparent) 1px,transparent 1px);
   background-size:26px 26px}
-.atlas-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.atlas-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:auto}
+.atlas-canvas.is-interacting .atlas-world{will-change:transform}
 .atlas-edge{fill:none;stroke:color-mix(in srgb,var(--atlas-text-3) 42%,transparent);stroke-width:1.4}
 .atlas-edge.is-active{stroke:color-mix(in srgb,var(--atlas-accent) 68%,transparent)}
 

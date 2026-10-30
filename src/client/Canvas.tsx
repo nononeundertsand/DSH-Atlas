@@ -31,62 +31,120 @@ interface DragState {
   moved: boolean
 }
 
+interface PanState {
+  x: number
+  y: number
+  camX: number
+  camY: number
+  clientX: number
+  clientY: number
+  raf: number
+}
+
 export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<Viewport>(viewport)
   const [localNodes, setLocalNodes] = useState(nodes)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(workspaceId))
   const [panning, setPanning] = useState(false)
+  const [interacting, setInteracting] = useState(false)
   const nodeW = NODE_W * cardScale
   const nodeH = NODE_H * cardScale
-  const panRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null)
+  const cameraRef = useRef(camera)
+  const panRef = useRef<PanState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const suppressClick = useRef(false)
   const saveTimer = useRef<number | undefined>(undefined)
+  const interactingTimer = useRef<number | undefined>(undefined)
+  const wheelRef = useRef<{ factor: number; x: number; y: number; raf: number } | null>(null)
+  const onViewportRef = useRef(onViewport)
 
   useEffect(() => setLocalNodes(nodes), [nodes])
-  useEffect(() => setCamera(viewport), [viewport])
+  useEffect(() => {
+    cameraRef.current = viewport
+    setCamera(viewport)
+  }, [viewport])
   useEffect(() => setCollapsed(loadCollapsed(workspaceId)), [workspaceId])
   useEffect(() => saveCollapsed(workspaceId, collapsed), [workspaceId, collapsed])
+  useEffect(() => {
+    onViewportRef.current = onViewport
+  }, [onViewport])
+  useEffect(
+    () => () => {
+      window.clearTimeout(interactingTimer.current)
+      window.clearTimeout(saveTimer.current)
+      if (wheelRef.current) window.cancelAnimationFrame(wheelRef.current.raf)
+    },
+    [],
+  )
 
   const hidden = useMemo(() => hiddenDescendants(localNodes, collapsed), [localNodes, collapsed])
   const visibleNodes = useMemo(() => localNodes.filter((node) => !hidden.has(node.id)), [localNodes, hidden])
 
-  const persist = useCallback(
-    (next: Viewport) => {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = window.setTimeout(() => onViewport(next), 260)
+  const persist = useCallback((next: Viewport) => {
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => onViewportRef.current(next), 260)
+  }, [])
+
+  const markInteracting = useCallback(() => {
+    setInteracting(true)
+    window.clearTimeout(interactingTimer.current)
+    interactingTimer.current = window.setTimeout(() => {
+      setInteracting(false)
+      persist(cameraRef.current)
+    }, 160)
+  }, [persist])
+
+  const applyCamera = useCallback(
+    (next: Viewport, save = true) => {
+      cameraRef.current = next
+      setCamera(next)
+      if (save) persist(next)
     },
-    [onViewport],
+    [persist],
   )
 
-  const zoomAt = useCallback((factor: number, clientX: number, clientY: number) => {
-    const stage = stageRef.current
-    if (!stage) return
-    const rect = stage.getBoundingClientRect()
-    const px = clientX - rect.left
-    const py = clientY - rect.top
-    setCamera((current) => {
+  const zoomAt = useCallback(
+    (factor: number, clientX: number, clientY: number, save = true) => {
+      const stage = stageRef.current
+      if (!stage) return
+      const rect = stage.getBoundingClientRect()
+      const px = clientX - rect.left
+      const py = clientY - rect.top
+      const current = cameraRef.current
       const zoom = clamp(current.zoom * factor, 0.15, 2.5)
       const worldX = (px - current.x) / current.zoom
       const worldY = (py - current.y) / current.zoom
-      const next = { zoom, x: px - worldX * zoom, y: py - worldY * zoom }
-      persist(next)
-      return next
-    })
-  }, [persist])
+      applyCamera({ zoom, x: px - worldX * zoom, y: py - worldY * zoom }, save)
+    },
+    [applyCamera],
+  )
 
-  // 原生 wheel 监听，确保可以 preventDefault。
+  // 原生 wheel 监听，确保可以 preventDefault；同一帧内合并多次滚动。
   useEffect(() => {
     const stage = stageRef.current
     if (!stage) return
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
-      zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY)
+      markInteracting()
+      const factor = Math.exp(-event.deltaY * 0.0015)
+      const pending = wheelRef.current
+      if (pending) {
+        pending.factor *= factor
+        pending.x = event.clientX
+        pending.y = event.clientY
+        return
+      }
+      const raf = window.requestAnimationFrame(() => {
+        const next = wheelRef.current
+        wheelRef.current = null
+        if (next) zoomAt(next.factor, next.x, next.y, false)
+      })
+      wheelRef.current = { factor, x: event.clientX, y: event.clientY, raf }
     }
     stage.addEventListener('wheel', onWheel, { passive: false })
     return () => stage.removeEventListener('wheel', onWheel)
-  }, [zoomAt])
+  }, [markInteracting, zoomAt])
 
   const fit = useCallback(() => {
     const stage = stageRef.current
@@ -107,35 +165,62 @@ export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddC
       x: (rect.width - (maxX - minX) * zoom) / 2 - minX * zoom,
       y: (rect.height - (maxY - minY) * zoom) / 2 - minY * zoom,
     }
-    setCamera(next)
-    persist(next)
-  }, [visibleNodes, nodeW, nodeH, persist])
+    applyCamera(next)
+  }, [visibleNodes, nodeW, nodeH, applyCamera])
 
   const lod = camera.zoom >= 0.85 ? '' : camera.zoom >= 0.5 ? 'lod-mid' : camera.zoom >= 0.3 ? 'lod-far' : 'lod-map'
 
   return (
     <div
       ref={stageRef}
-      className={`atlas-canvas ${panning ? 'panning' : ''} ${lod}`}
+      className={`atlas-canvas ${panning ? 'panning' : ''} ${panning || interacting ? 'is-interacting' : ''} ${lod}`}
       onPointerDown={(event) => {
         if (event.button !== 0 || event.target !== event.currentTarget) return
-        panRef.current = { x: event.clientX, y: event.clientY, camX: camera.x, camY: camera.y }
+        const current = cameraRef.current
+        panRef.current = {
+          x: event.clientX,
+          y: event.clientY,
+          camX: current.x,
+          camY: current.y,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          raf: 0,
+        }
         setPanning(true)
+        markInteracting()
         event.currentTarget.setPointerCapture(event.pointerId)
       }}
       onPointerMove={(event) => {
         const pan = panRef.current
         if (!pan) return
-        setCamera((current) => ({ ...current, x: pan.camX + event.clientX - pan.x, y: pan.camY + event.clientY - pan.y }))
+        pan.clientX = event.clientX
+        pan.clientY = event.clientY
+        if (pan.raf) return
+        pan.raf = window.requestAnimationFrame(() => {
+          pan.raf = 0
+          applyCamera(
+            {
+              ...cameraRef.current,
+              x: pan.camX + pan.clientX - pan.x,
+              y: pan.camY + pan.clientY - pan.y,
+            },
+            false,
+          )
+        })
       }}
       onPointerUp={() => {
-        if (!panRef.current) return
+        const pan = panRef.current
+        if (!pan) return
+        if (pan.raf) window.cancelAnimationFrame(pan.raf)
+        const next = {
+          ...cameraRef.current,
+          x: pan.camX + pan.clientX - pan.x,
+          y: pan.camY + pan.clientY - pan.y,
+        }
         panRef.current = null
         setPanning(false)
-        setCamera((current) => {
-          persist(current)
-          return current
-        })
+        applyCamera(next)
+        markInteracting()
       }}
       onDoubleClick={(event) => {
         if (event.target === event.currentTarget) fit()

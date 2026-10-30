@@ -1,6 +1,6 @@
 {
   "name": "dsh-atlas",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "把对话长成一张地图 · A spatial workspace for long conversations, as a DeepSeek Harness plugin",
   "type": "module",
   "license": "MIT",
