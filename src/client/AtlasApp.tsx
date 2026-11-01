@@ -2,14 +2,15 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AtlasNode, Point, SearchHit, ThreadSnapshot, UpdateInfo, Viewport, Workspace, WorkspaceSnapshot } from '../shared/types.js'
 import { api } from './api.js'
+import { NodeActions, type NodeMenuTarget } from './NodeActions.js'
 import { Canvas } from './Canvas.js'
 import { ChatSheet } from './ChatSheet.js'
 import { DEFAULT_SETTINGS, loadSettings, normalize, saveSettings, type AtlasSettings } from './settings.js'
 
-export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpenSession?: (node: AtlasNode) => Promise<void> }) {
+export function AtlasApp({ onExit, onOpenSession, onLibrary }: { onExit?: () => void; onOpenSession?: (node: AtlasNode) => Promise<void>; onLibrary?: (tab: 'retained' | 'trash') => void }) {
+  const [nodeMenu, setNodeMenu] = useState<NodeMenuTarget>()
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null)
-  const [dataDir, setDataDir] = useState('')
   const [thread, setThread] = useState<ThreadSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [threadLoading, setThreadLoading] = useState(false)
@@ -43,8 +44,15 @@ export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpe
     const boot = await api.bootstrap()
     setWorkspaces(boot.workspaces)
     setSnapshot(boot.snapshot)
-    setDataDir(boot.dataDir)
   }, [])
+
+  useEffect(() => {
+    const changed = () => { void reload().catch(() => undefined) }
+    window.addEventListener('atlas:nodes-changed', changed)
+    window.addEventListener('focus', changed)
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') changed() }, 4000)
+    return () => { window.removeEventListener('atlas:nodes-changed', changed); window.removeEventListener('focus', changed); window.clearInterval(timer) }
+  }, [reload])
 
   useEffect(() => {
     let alive = true
@@ -273,6 +281,7 @@ export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpe
         cardScale={settings.cardScale}
         nodes={snapshot.nodes}
         viewport={snapshot.viewport}
+        onNodeMenu={(node, x, y) => setNodeMenu({ node, x, y })}
         onOpen={(node) => void openNode(node)}
         onAddChild={(parent) => {
           setDialogValue('')
@@ -282,15 +291,8 @@ export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpe
         onViewport={saveViewport}
       />
 
+      {nodeMenu ? <NodeActions target={nodeMenu} onClose={() => setNodeMenu(undefined)} onOpen={node => void openNode(node)} onAddChild={node => { setDialogValue(''); setDialog({ kind: 'node', parentId: node.id }) }} onDeleted={() => { void reload(); showToast('节点已移至回收站，绑定会话进入未分组') }} /> : null}
       <div className="atlas-topbar">
-        <div className="atlas-brand" title={`工作区存储：${dataDir}`}>
-          <span className="atlas-brand-mark">A</span>
-          <div>
-            <div className="atlas-brand-name">Atlas · 图志</div>
-            <div className="atlas-brand-sub">{snapshot.nodes.length} 个节点 · {snapshot.nodes.filter((node) => node.status === 'closed').length} 已收口</div>
-          </div>
-        </div>
-
         {update ? (
           <a
             className="atlas-update"
@@ -321,6 +323,8 @@ export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpe
         >
           ＋地图
         </button>
+
+        {onLibrary ? <button className="atlas-btn" onClick={() => onLibrary('trash')}>回收站</button> : null}
 
         <span className="atlas-spacer" />
 

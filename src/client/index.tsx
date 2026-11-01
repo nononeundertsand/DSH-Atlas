@@ -8,8 +8,10 @@
 import type { ClientContext } from '../shared/dsh.js'
 import { AtlasApp } from './AtlasApp.js'
 import { ATLAS_CSS } from './styles.js'
+import { NodeLibrary } from './NodeLibrary.js'
 import { SessionTree } from './SessionTree.js'
-import { api } from './api.js'
+import { api, ApiErr } from './api.js'
+import { SessionUnavailable } from './SessionUnavailable.js'
 import type { AtlasNode } from '../shared/types.js'
 
 const PANEL_ID = 'atlas'
@@ -17,14 +19,35 @@ const PANEL_ID = 'atlas'
 export const inject = ['slots', 'layout', 'uiWorkspace', 'sessions']
 
 export function apply(ctx: ClientContext): void {
+  const showLibrary = (tab: 'retained' | 'trash') => ctx.layout.selectPanel(`atlas-${tab}`)
   let removeTree: (() => void) | undefined
   let pending: Promise<void> | undefined
   let disposed = false
+  let removeUnavailable: (() => void) | undefined
   const showWorkspaces = () => { removeTree?.(); removeTree = undefined; sessionStorage.removeItem('atlas.current-node') }
   const openSession = (node: AtlasNode): Promise<void> => {
     if (pending) return pending
     pending = (async () => {
-      const result = await api.openSession(node.id)
+      let result: { node: AtlasNode }
+      try { result = await api.openSession(node.id) }
+      catch (error) {
+        if (!(error instanceof ApiErr) || error.code !== 'E_SESSION_ARCHIVED') throw error
+        const { node: current, archivedSessionId } = await api.sessionState(node.id)
+        if (!archivedSessionId) throw error
+        if (disposed) return
+        removeUnavailable?.()
+        removeUnavailable = ctx.slots.register({ name: 'main', key: 'atlas-session-unavailable', inject: () => ({ node: current,
+          onBack: () => ctx.layout.selectPanel(PANEL_ID),
+          onNew: async () => { const fresh = await api.newSession(current.id, archivedSessionId); await openSession(fresh.node) },
+          onRestore: async () => {
+            const result = await api.unarchiveSession(archivedSessionId)
+            if (result.rebound) await openSession(current)
+            else { showWorkspaces(); await ctx.sessions.refresh(); ctx.uiWorkspace.openSession(archivedSessionId) }
+          },
+        }) }, SessionUnavailable)
+        ctx.layout.selectPanel('atlas-session-unavailable')
+        return
+      }
       if (disposed) return
       const bound = result.node
       if (!bound.sessionId) throw new Error('节点缺少 Session 绑定')
@@ -32,14 +55,24 @@ export function apply(ctx: ClientContext): void {
       removeTree?.()
       removeTree = ctx.slots.register({
         name: 'sidebar.workspaces', priority: -10,
-        inject: () => ({ current: bound, openNode: openSession, showMap: () => ctx.layout.selectPanel(PANEL_ID), showWorkspaces }),
+        inject: () => ({ current: bound, openNode: openSession, showMap: () => ctx.layout.selectPanel(PANEL_ID), showWorkspaces, showLibrary,
+          onDeleted: async (ids: string[]) => {
+            if (!ids.includes(bound.id)) return
+            showWorkspaces()
+            try {
+              const { snapshot } = await api.getWorkspace(bound.workspaceId)
+              const parent = snapshot.nodes.find(n => n.id === bound.parentId)
+              if (parent) { await openSession(parent); return }
+            } catch { /* 回到画布后可重新选择节点。 */ }
+            ctx.layout.selectPanel(PANEL_ID)
+          } }),
       }, SessionTree)
       sessionStorage.setItem('atlas.current-node', bound.id)
       ctx.uiWorkspace.openSession(bound.sessionId)
     })().finally(() => { pending = undefined })
     return pending
   }
-  ctx.effect(() => () => { disposed = true; removeTree?.() }, 'dsh-atlas: session navigation')
+  ctx.effect(() => () => { disposed = true; removeTree?.(); removeUnavailable?.() }, 'dsh-atlas: session navigation')
   ctx.effect(() => {
     const existing = document.querySelector('style[data-dsh-atlas]')
     if (existing) return
@@ -55,7 +88,7 @@ export function apply(ctx: ClientContext): void {
       {
         name: 'main',
         key: PANEL_ID,
-        inject: () => ({ exit: () => ctx.layout.selectPanel(null), openSession }),
+        inject: () => ({ exit: () => ctx.layout.selectPanel(null), openSession, showLibrary }),
       },
       AtlasPanel as never,
     )
@@ -64,6 +97,13 @@ export function apply(ctx: ClientContext): void {
     return dispose
   })
 
+  ctx.slots.inject('main', () => {
+    const disposers = (['retained', 'trash'] as const).map(tab => ctx.slots.register({
+      name: 'main', key: `atlas-${tab}`,
+      inject: () => ({ initialTab: tab, onBack: () => ctx.layout.selectPanel(PANEL_ID), onOpenSession: async (id: string) => { showWorkspaces(); await ctx.sessions.refresh(); ctx.uiWorkspace.openSession(id) } }),
+    }, NodeLibrary))
+    return () => disposers.forEach(dispose => dispose())
+  })
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
       { name: 'sidebar.panellist', id: PANEL_ID, order: 5, label: 'Atlas · 图志' },
@@ -82,8 +122,8 @@ export function apply(ctx: ClientContext): void {
   })
 }
 
-function AtlasPanel({ exit, openSession }: { exit: () => void; openSession: (node: AtlasNode) => Promise<void> }) {
-  return <AtlasApp onExit={exit} onOpenSession={openSession} />
+function AtlasPanel({ exit, openSession, showLibrary }: { exit: () => void; openSession: (node: AtlasNode) => Promise<void>; showLibrary: (tab: 'retained' | 'trash') => void }) {
+  return <AtlasApp onExit={exit} onOpenSession={openSession} onLibrary={showLibrary} />
 }
 
 function AtlasIcon({ size = 16, active = false }: { size?: number; active?: boolean }) {

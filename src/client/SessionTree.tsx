@@ -1,26 +1,32 @@
 import { useEffect, useState } from 'react'
-import type { AtlasNode, ThreadSnapshot, WorkspaceSnapshot } from '../shared/types.js'
+import type { AtlasNode, WorkspaceSnapshot } from '../shared/types.js'
 import { api } from './api.js'
-import { ChatSheet } from './ChatSheet.js'
+import { NodeActions, type NodeMenuTarget } from './NodeActions.js'
 
 export interface SessionTreeProps {
   current: AtlasNode
   openNode(node: AtlasNode): Promise<void>
+  onDeleted(ids: string[]): void
+  showLibrary(tab: 'retained' | 'trash'): void
   showMap(): void
   showWorkspaces(): void
 }
 
-export function SessionTree({ current, openNode, showMap, showWorkspaces }: SessionTreeProps) {
+export function SessionTree({ current, openNode, showMap, showWorkspaces, showLibrary, onDeleted }: SessionTreeProps) {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [history, setHistory] = useState<ThreadSnapshot>()
-  const [menu, setMenu] = useState<string>()
+  const [menu, setMenu] = useState<NodeMenuTarget>()
   const [creatingUnder, setCreatingUnder] = useState<AtlasNode>()
   const [title, setTitle] = useState('')
   const [childrenCollapsed, setChildrenCollapsed] = useState(false)
   const reload = async () => setSnapshot((await api.getWorkspace(current.workspaceId)).snapshot)
   useEffect(() => { void reload().catch(e => setError(String(e))) }, [current.id, current.workspaceId])
+  useEffect(() => {
+    const changed = () => { void reload().catch(e => setError(String(e))) }
+    window.addEventListener('atlas:nodes-changed', changed)
+    return () => window.removeEventListener('atlas:nodes-changed', changed)
+  }, [current.workspaceId])
   const run = async (action: () => Promise<void>) => {
     if (busy) return
     setBusy(true)
@@ -44,7 +50,14 @@ export function SessionTree({ current, openNode, showMap, showWorkspaces }: Sess
     const selected = node.id === current.id
     return <div key={node.id} className={child ? 'atlas-tree-branch' : undefined}>
       <div className={`atlas-tree-row ${selected ? 'selected' : ''}`}
-        onContextMenu={e => { e.preventDefault(); setMenu(menu === node.id ? undefined : node.id) }}>
+        onKeyDown={e => {
+          if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+            e.preventDefault()
+            const box = e.currentTarget.getBoundingClientRect()
+            setMenu({ node, x: box.left + 20, y: box.top + 20 })
+          }
+        }}
+        onContextMenu={e => { e.preventDefault(); setMenu({ node, x: e.clientX, y: e.clientY }) }}>
         {selected && children.length ? <button className={`atlas-tree-toggle ${childrenCollapsed ? 'collapsed' : ''}`}
           aria-label={`${childrenCollapsed ? '展开' : '收起'}「${node.title}」的子节点`}
           aria-expanded={!childrenCollapsed} aria-controls={`atlas-children-${node.id}`}
@@ -56,7 +69,7 @@ export function SessionTree({ current, openNode, showMap, showWorkspaces }: Sess
           {selected ? <span className="atlas-tree-current" aria-label="当前节点" /> : null}
         </button>
       </div>
-      {menu === node.id ? <button className="atlas-tree-context" disabled={busy} onClick={() => { setCreatingUnder(node); setMenu(undefined) }}><TreeIcon kind="plus" />创建子节点</button> : null}
+
     </div>
   }
   return <section className="atlas-session-tree" aria-label="Atlas 工作区树">
@@ -82,12 +95,12 @@ export function SessionTree({ current, openNode, showMap, showWorkspaces }: Sess
       {busy ? <p className="atlas-tree-notice" role="status">正在打开…</p> : null}
       {error ? <p className="atlas-tree-notice" role="alert">{error}</p> : null}
     </div>
-    <footer className="atlas-tree-footer"><button disabled={busy} title="查看原 Atlas 线程的只读历史" onClick={() => void run(async () => setHistory((await api.getThread(current.threadId)).snapshot))}><TreeIcon kind="history" />历史对话<TreeIcon kind="chevron" /></button></footer>
-    {history ? <div className="atlas-app" style={{position: 'fixed', inset: 0, zIndex: 100}}><ChatSheet readOnly snapshot={history} onBack={() => setHistory(undefined)} onNodeChanged={() => void reload()} onSnapshotStale={() => void reload()} onDeleted={() => { setHistory(undefined); showMap() }} onToast={setError} /></div> : null}
+    {menu ? <NodeActions target={menu} onClose={() => setMenu(undefined)} onOpen={node => void run(() => openNode(node))} onAddChild={setCreatingUnder} onDeleted={ids => { void reload(); onDeleted(ids) }} /> : null}
+    <footer className="atlas-tree-footer"><button onClick={() => showLibrary('trash')}>回收站</button></footer>
   </section>
 }
 
-function TreeIcon({ kind }: { kind: 'folder' | 'map' | 'exit' | 'plus' | 'back' | 'chat' | 'chevron' | 'history' }) {
+function TreeIcon({ kind }: { kind: 'folder' | 'map' | 'exit' | 'plus' | 'back' | 'chat' | 'chevron' }) {
   const paths = {
     folder: <path d="M2 5a1 1 0 0 1 1-1h4l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z" />,
     map: <><rect x="2" y="2" width="4" height="4" rx="1" /><rect x="10" y="2" width="4" height="4" rx="1" /><rect x="6" y="10" width="4" height="4" rx="1" /><path d="M4 6v2h8V6M8 8v2" /></>,
@@ -96,7 +109,6 @@ function TreeIcon({ kind }: { kind: 'folder' | 'map' | 'exit' | 'plus' | 'back' 
     back: <path d="m6 4-4 4 4 4M2 8h11" />,
     chat: <path d="M3 3h10v8H7l-4 3Z" />,
     chevron: <path d="m5 6 3 3 3-3" />,
-    history: <><path d="M3 5a5.5 5.5 0 1 1-1 5M2 2v4h4M8 5v3l2 1" /></>,
   }
   return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg>
 }

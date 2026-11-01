@@ -28,7 +28,7 @@ export interface AtlasConfig {
   updateBranch?: string
 }
 
-export const inject = ['webServer', 'llm', 'agentDefaultModel', 'sessionController', 'workspaceRegistry']
+export const inject = ['webServer', 'llm', 'agentDefaultModel', 'sessionController', 'workspaceRegistry', 'agents', 'sessionQuery']
 
 export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
   const store = new AtlasStore(config.dataDir)
@@ -41,6 +41,8 @@ export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
     modelHint: config.model ?? 'auto',
     checkUpdate: (force) => updates.check(force),
     nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry),
+    sessionQuery: ctx.sessionQuery,
+    isSessionRunning: id => ctx.agents?.get(id)?.status === 'running',
   })
 
   ctx.effect(

@@ -37,7 +37,14 @@ const fakeLlm = {
   },
 }
 
+const archivedSessionIds = []
+const nativeWorkspaces = new Map()
+const liveSessionIds = new Set()
+let running = false
 const ctx = {
+  agents: { get: () => ({status: running ? 'running' : 'idle'}) },
+  sessionController: { create: async ({sessionId}) => {liveSessionIds.add(sessionId);return {sessionId}}, inspect: async id => {if(!liveSessionIds.has(id)){class ApiSessionNotFound extends Error{};throw new ApiSessionNotFound('missing')}return {}} },
+  workspaceRegistry: { create: async path => { let item=[...nativeWorkspaces.values()].find(w=>w.path===path); if(!item){item={id:'native-'+nativeWorkspaces.size,path,sessionIds:[],attachSession:async()=>{}};nativeWorkspaces.set(item.id,item)}return item }, list: () => [...nativeWorkspaces.values()], delete: async id => nativeWorkspaces.delete(id), archivedSessionIds, unarchiveSession: async id => { const i=archivedSessionIds.indexOf(id); if(i>=0) archivedSessionIds.splice(i,1) }, archiveSession: async id => { if (!archivedSessionIds.includes(id)) archivedSessionIds.push(id) } },
   webServer: {
     register(route) {
       routes.push(route)
@@ -150,12 +157,100 @@ try {
   assert.ok(search.hits.some((hit) => hit.nodeId === node.id))
   passed('跨节点/消息/卡片搜索')
 
-  const deleted = await json(`/ext/atlas/nodes/${promoted.node.id}`, { method: 'DELETE' })
+  const preview = await json(`/ext/atlas/nodes/${promoted.node.id}/delete-preview`)
+  const deleted = await json(`/ext/atlas/nodes/${promoted.node.id}`, { method: 'DELETE', body: JSON.stringify({token: preview.token}) })
   assert.deepEqual(deleted.deleted, [promoted.node.id])
   const finalSnapshot = await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)
   assert.equal(finalSnapshot.snapshot.nodes.length, 1)
   passed('删除节点')
 
+  let bound = await json(`/ext/atlas/nodes/${node.id}/session`, {method:'POST'})
+  const boundSessionId = bound.node.sessionId
+  const plan = await json(`/ext/atlas/nodes/${node.id}/delete-preview`)
+  running = true
+  const blocked = await fetch(`${base}/ext/atlas/nodes/${node.id}`, {method:'DELETE',body:JSON.stringify({token:plan.token})})
+  assert.equal(blocked.status,409)
+  running = false
+  await json(`/ext/atlas/nodes/${node.id}`, {method:'DELETE',body:JSON.stringify({token:plan.token})})
+  const trash = await json('/ext/atlas/trash')
+  assert.equal(trash.version,8)
+  assert.ok(!archivedSessionIds.includes(boundSessionId),'删除节点不归档其绑定 Session')
+  assert.equal((await json('/ext/atlas/trash')).nodes.find(n => n.id === node.id).sessionId, boundSessionId, '删除节点保留绑定记录')
+  await json(`/ext/atlas/nodes/${node.id}/restore`,{method:'POST'})
+  assert.ok((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.some(n=>n.id===node.id))
+  const reopened = await json(`/ext/atlas/nodes/${node.id}/session`,{method:'POST'})
+  assert.equal(reopened.node.sessionId, boundSessionId, '恢复节点继续绑定原 Session')
+  passed('运行中拒绝删除、删除不归档、恢复回绑原会话')
+
+  // 归档会话：节点保留，Session 进原生归档，节点当前绑定清空
+  await json(`/ext/atlas/nodes/${node.id}/archive-session`,{method:'POST',body:JSON.stringify({sessionId:boundSessionId})})
+  assert.ok(archivedSessionIds.includes(boundSessionId),'归档会话进入原生归档')
+  assert.equal((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.some(n=>n.id===node.id),true,'归档会话保留节点')
+  assert.equal((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.find(n=>n.id===node.id).sessionId,undefined,'归档清空节点当前绑定')
+  // 会话页应包含该归档会话（历史来源）
+  const sessionList = (await json('/ext/atlas/trash')).sessions
+  assert.ok(sessionList.some(s => s.sessionId === boundSessionId && s.archived), '归档会话出现在会话页且标记已归档')
+  // 恢复归档会话：节点当前无绑定，应回绑
+  await json(`/ext/atlas/unarchive-session`,{method:'POST',body:JSON.stringify({sessionId:boundSessionId})})
+  assert.ok(!archivedSessionIds.includes(boundSessionId),'恢复归档会话取消归档')
+  assert.equal((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.find(n=>n.id===node.id).sessionId, boundSessionId, '恢复后回绑原会话')
+  passed('归档会话与恢复归档会话')
+
+  // 归档 S1 后新建 S2，再恢复 S1：S2 绑定不变，两条来源都在
+  await json(`/ext/atlas/nodes/${node.id}/archive-session`,{method:'POST',body:JSON.stringify({sessionId:boundSessionId})})
+  const s2 = await json(`/ext/atlas/nodes/${node.id}/new-session`,{method:'POST',body:JSON.stringify({expectedSessionId:boundSessionId})})
+  const s2Id = s2.node.sessionId
+  assert.notEqual(s2Id, boundSessionId)
+  const unarchiveS1 = await json(`/ext/atlas/unarchive-session`,{method:'POST',body:JSON.stringify({sessionId:boundSessionId})})
+  assert.equal(unarchiveS1.rebound, false, '已绑定 S2 时恢复 S1 不回绑')
+  assert.equal((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.find(n=>n.id===node.id).sessionId, s2Id, '节点仍绑定 S2')
+  const afterLinks = (await json('/ext/atlas/trash')).sessions
+  assert.ok(afterLinks.some(s => s.sessionId === boundSessionId), 'S1 来源记录仍在')
+  assert.ok(afterLinks.some(s => s.sessionId === s2Id), 'S2 来源记录仍在')
+  passed('归档 S1 后新建 S2 并恢复 S1，不覆盖 S2')
+
+  const batchNode=(await json('/ext/atlas/nodes',{method:'POST',body:JSON.stringify({workspaceId:boot.snapshot.workspace.id,title:'列表归档回归'})})).node
+  const batchSession=(await json(`/ext/atlas/nodes/${batchNode.id}/session`,{method:'POST'})).node.sessionId
+  const batchNode2=(await json('/ext/atlas/nodes',{method:'POST',body:JSON.stringify({workspaceId:boot.snapshot.workspace.id,title:'批量归档回归'})})).node
+  const batchSession2=(await json(`/ext/atlas/nodes/${batchNode2.id}/session`,{method:'POST'})).node.sessionId
+  running=true
+  const batchBlocked=await fetch(`${base}/ext/atlas/trash/sessions`,{method:'POST',body:JSON.stringify({sessionIds:[batchSession]})})
+  assert.equal(batchBlocked.status,409)
+  running=false
+  assert.ok(!archivedSessionIds.includes(batchSession))
+  assert.equal((await json(`/ext/atlas/workspaces/${boot.snapshot.workspace.id}`)).snapshot.nodes.find(n=>n.id===batchNode.id).sessionId,batchSession)
+  await json('/ext/atlas/trash/sessions',{method:'POST',body:JSON.stringify({sessionIds:[batchSession,batchSession,batchSession2]})})
+  assert.equal((await json(`/ext/atlas/nodes/${batchNode2.id}/session-state`)).node.sessionId,undefined,'批量中的不同节点均清空绑定')
+  await json('/ext/atlas/trash/sessions',{method:'POST',body:JSON.stringify({sessionIds:[batchSession]})})
+  const state=await json(`/ext/atlas/nodes/${batchNode.id}/session-state`)
+  assert.equal(state.node.sessionId,undefined,'列表归档同样清空当前绑定')
+  assert.equal(state.archivedSessionId,batchSession)
+  const gate=await fetch(`${base}/ext/atlas/nodes/${batchNode.id}/session`,{method:'POST'})
+  assert.equal(gate.status,409)
+  assert.equal((await gate.json()).error.code,'E_SESSION_ARCHIVED')
+  const batchRecord=(await json('/ext/atlas/trash')).sessions.find(s=>s.sessionId===batchSession)
+  assert.equal(batchRecord.isCurrent,false)
+  assert.equal(batchRecord.archived,true)
+  const restoredBatch=await json('/ext/atlas/unarchive-session',{method:'POST',body:JSON.stringify({sessionId:batchSession})})
+  assert.equal(restoredBatch.rebound,true)
+  const batchNewPlan=await json(`/ext/atlas/nodes/${batchNode.id}/delete-preview`)
+  await json(`/ext/atlas/nodes/${batchNode.id}`,{method:'DELETE',body:JSON.stringify({token:batchNewPlan.token})})
+  await json('/ext/atlas/trash/sessions',{method:'POST',body:JSON.stringify({sessionIds:[batchSession]})})
+  assert.equal((await json('/ext/atlas/trash')).nodes.find(n=>n.id===batchNode.id).sessionId,undefined,'列表归档也会清空已删除节点的当前绑定')
+  passed('列表归档统一清空绑定、空会话入口和重复请求')
+
+  const promotedBatch = trash.nodes.find(n => n.id === promoted.node.id).deletionBatchId
+  await json(`/ext/atlas/nodes/${promoted.node.id}/purge`, {method:'POST',body:JSON.stringify({batchId:promotedBatch})})
+  const newPlan = await json(`/ext/atlas/nodes/${node.id}/delete-preview`)
+  await json(`/ext/atlas/nodes/${node.id}`, {method:'DELETE',body:JSON.stringify({token:newPlan.token})})
+  const rootBatch = (await json('/ext/atlas/trash')).nodes.find(n => n.id === node.id).deletionBatchId
+  await json('/ext/atlas/trash/purge', {method:'POST',body:JSON.stringify({targets:[{id:node.id,batchId:rootBatch}]})})
+  assert.ok(!archivedSessionIds.includes(s2Id),'彻底删除节点不归档 Session')
+  assert.ok((await json('/ext/atlas/trash')).nodes.find(n => n.id === node.id).purgedAt)
+  // 彻底删除节点后恢复 S2，不重建节点
+  const purgeThenUnarchive = await json(`/ext/atlas/unarchive-session`,{method:'POST',body:JSON.stringify({sessionId:s2Id})})
+  assert.equal(purgeThenUnarchive.rebound, false, '彻底删除节点后恢复会话不重建节点')
+  passed('彻底删除节点并保留会话入口')
   console.log('\nAtlas smoke: OK')
 } finally {
   await new Promise((resolve) => server.close(resolve))

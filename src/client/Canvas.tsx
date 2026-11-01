@@ -15,6 +15,7 @@ export interface CanvasProps {
   cardScale: number
   nodes: AtlasNode[]
   viewport: Viewport
+  onNodeMenu?: (node: AtlasNode, x: number, y: number) => void
   onOpen: (node: AtlasNode) => void
   onAddChild: (parent: AtlasNode) => void
   onMove: (nodeId: string, position: Point) => void
@@ -41,7 +42,7 @@ interface PanState {
   raf: number
 }
 
-export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddChild, onMove, onViewport }: CanvasProps) {
+export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddChild, onMove, onViewport, onNodeMenu }: CanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<Viewport>(viewport)
   const [localNodes, setLocalNodes] = useState(nodes)
@@ -265,6 +266,15 @@ export function Canvas({ workspaceId, cardScale, nodes, viewport, onOpen, onAddC
             className={`atlas-node is-${node.status} ${childCount > 0 ? 'has-children' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}
             style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
             title={node.title}
+            tabIndex={0}
+            onKeyDown={event => {
+              if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                event.preventDefault()
+                const box = event.currentTarget.getBoundingClientRect()
+                onNodeMenu?.(node, box.left + 20, box.top + 20)
+              }
+            }}
+            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onNodeMenu?.(node, event.clientX, event.clientY) }}
             onPointerDown={(event) => {
               if (event.button !== 0) return
               event.stopPropagation()

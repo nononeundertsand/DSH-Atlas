@@ -54,10 +54,22 @@ export interface DefaultModelPort {
 }
 
 export interface HostContext {
-  workspaceRegistry?: { create(path: string, title?: string): Promise<{ id: string; attachSession(id: string): Promise<void> }> }
+  agents?: { get(id: string): { status: string } | undefined }
+  workspaceRegistry?: {
+    create(path: string, title?: string): Promise<{ id: string; attachSession(id: string): Promise<void> }>
+    list?(): Array<{ id: string; path: string; sessionIds: string[] }>
+    delete?(id: string): Promise<boolean>
+    archiveSession?(sessionId: string): Promise<void>
+    unarchiveSession?(sessionId: string): Promise<void>
+    readonly archivedSessionIds?: string[]
+  }
   sessionController?: {
     create(input: { sessionId: string; workspaceId: string }): Promise<{ sessionId: string }>
     inspect(id: string): Promise<unknown>
+  }
+  /** DSH 会话标题查询；读真实 session/title 事件，缺失时回退节点标题。 */
+  sessionQuery?: {
+    readTitleSnapshots(ids: string[]): Promise<Record<string, string | null>>
   }
   webServer: WebServerPort
   llm?: LlmPort

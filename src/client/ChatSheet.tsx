@@ -321,7 +321,8 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
   const remove = async () => {
     if (!window.confirm(`删除节点「${node.title}」及其所有子节点？`)) return
     try {
-      await api.deleteNode(node.id)
+      const preview = await api.deletePreview(node.id)
+      await api.deleteNode(node.id, preview.token)
       onDeleted(node.id)
     } catch (error) {
       onToast(error instanceof Error ? error.message : '删除失败')
