@@ -8,12 +8,38 @@
 import type { ClientContext } from '../shared/dsh.js'
 import { AtlasApp } from './AtlasApp.js'
 import { ATLAS_CSS } from './styles.js'
+import { SessionTree } from './SessionTree.js'
+import { api } from './api.js'
+import type { AtlasNode } from '../shared/types.js'
 
 const PANEL_ID = 'atlas'
 
-export const inject = ['slots', 'layout']
+export const inject = ['slots', 'layout', 'uiWorkspace', 'sessions']
 
 export function apply(ctx: ClientContext): void {
+  let removeTree: (() => void) | undefined
+  let pending: Promise<void> | undefined
+  let disposed = false
+  const showWorkspaces = () => { removeTree?.(); removeTree = undefined; sessionStorage.removeItem('atlas.current-node') }
+  const openSession = (node: AtlasNode): Promise<void> => {
+    if (pending) return pending
+    pending = (async () => {
+      const result = await api.openSession(node.id)
+      if (disposed) return
+      const bound = result.node
+      if (!bound.sessionId) throw new Error('节点缺少 Session 绑定')
+      await ctx.sessions.refresh()
+      removeTree?.()
+      removeTree = ctx.slots.register({
+        name: 'sidebar.workspaces', priority: -10,
+        inject: () => ({ current: bound, openNode: openSession, showMap: () => ctx.layout.selectPanel(PANEL_ID), showWorkspaces }),
+      }, SessionTree)
+      sessionStorage.setItem('atlas.current-node', bound.id)
+      ctx.uiWorkspace.openSession(bound.sessionId)
+    })().finally(() => { pending = undefined })
+    return pending
+  }
+  ctx.effect(() => () => { disposed = true; removeTree?.() }, 'dsh-atlas: session navigation')
   ctx.effect(() => {
     const existing = document.querySelector('style[data-dsh-atlas]')
     if (existing) return
@@ -29,7 +55,7 @@ export function apply(ctx: ClientContext): void {
       {
         name: 'main',
         key: PANEL_ID,
-        inject: () => ({ exit: () => ctx.layout.selectPanel(null) }),
+        inject: () => ({ exit: () => ctx.layout.selectPanel(null), openSession }),
       },
       AtlasPanel as never,
     )
@@ -44,10 +70,20 @@ export function apply(ctx: ClientContext): void {
       AtlasIcon as never,
     ),
   )
+  ctx.slots.inject('sidebar.workspaces', () => {
+    const last = sessionStorage.getItem('atlas.current-node')
+    if (last) void api.bootstrap().then(async ({ workspaces }) => {
+      for (const workspace of workspaces) {
+        const { snapshot } = await api.getWorkspace(workspace.id)
+        const node = snapshot.nodes.find(item => item.id === last)
+        if (node && !disposed) { await openSession(node); return }
+      }
+    }).catch(() => { sessionStorage.removeItem('atlas.current-node') })
+  })
 }
 
-function AtlasPanel({ exit }: { exit: () => void }) {
-  return <AtlasApp onExit={exit} />
+function AtlasPanel({ exit, openSession }: { exit: () => void; openSession: (node: AtlasNode) => Promise<void> }) {
+  return <AtlasApp onExit={exit} onOpenSession={openSession} />
 }
 
 function AtlasIcon({ size = 16, active = false }: { size?: number; active?: boolean }) {

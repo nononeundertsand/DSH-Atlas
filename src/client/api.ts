@@ -68,7 +68,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  openSession: (nodeId: string) => request<{ node: AtlasNode }>(`${ROUTES.node(nodeId)}/session`, { method: 'POST' }),
   bootstrap: () => request<BootstrapPayload>(ROUTES.bootstrap),
+  getWorkspace: (id: string) => request<{ snapshot: WorkspaceSnapshot }>(ROUTES.workspace(id)),
 
   checkUpdate: () => request<UpdateInfo>(ROUTES.update),
 

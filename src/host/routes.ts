@@ -27,6 +27,7 @@ import type {
   VisitInput,
 } from '../shared/types.js'
 import { ATLAS_BASE, LIMITS } from '../shared/protocol.js'
+import type { NodeSessions } from './sessions.js'
 
 interface RequestLike {
   method?: string
@@ -45,6 +46,7 @@ interface ResponseLike {
 }
 
 export interface RouterDeps {
+  nodeSessions?: NodeSessions
   store: AtlasStore
   model: AtlasModel
   dataDir: string
@@ -141,6 +143,11 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     }
 
     const nodeId = decode(path[1]!)
+    if (path.length === 3 && path[2] === 'session') {
+      allow(method, ['POST'])
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH Session 服务不可用')
+      return send(res, 200, { node: await deps.nodeSessions.open(nodeId) })
+    }
     if (path.length === 2) {
       allow(method, ['PATCH', 'DELETE'])
       if (method === 'PATCH') {
@@ -260,6 +267,7 @@ async function turn(req: RequestLike, res: ResponseLike, deps: RouterDeps, threa
   if (text.length > LIMITS.maxMessageChars) throw new Error('E_BUDGET: 单条消息过长')
 
   const snapshot = await deps.store.getThread(threadId)
+  if (snapshot.node.sessionId) throw new Error('E_UNSUPPORTED: 此节点已绑定 DSH Session，请在原生聊天中发送消息')
   const { workspace, node } = snapshot
 
   const userMessage = await deps.store.appendMessage(threadId, 'user', text, body.quote)

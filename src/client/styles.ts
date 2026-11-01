@@ -1,5 +1,48 @@
 /** Atlas 的样式。作用域统一在 .atlas-app 内，颜色与字体优先跟随 DSH 的 --dsw-* / --dsh-* token。 */
 export const ATLAS_CSS = String.raw`
+/* DSH rc.2 原生空白聊天的标题标记；不替换原生 Conversation。 */
+[data-slot="conversation.composer"] span[class$="_previewBadge"]{display:none}
+.atlas-session-tree{--tree-text:var(--dsw-alias-label-primary,#1f2329);--tree-muted:var(--dsw-alias-label-tertiary,#87909d);--tree-hover:var(--dsw-alias-interactive-bg-hover,rgba(128,138,153,.1));--tree-line:var(--dsw-alias-border-l3,rgba(128,138,153,.18));box-sizing:border-box;height:100%;min-height:0;display:flex;flex-direction:column;padding:8px 12px 4px;color:var(--tree-text);font-family:inherit;font-size:13px;line-height:20px;overflow:hidden}
+.atlas-session-tree *{box-sizing:border-box}
+.atlas-session-tree button{font:inherit;color:inherit;background:transparent;border:0;cursor:pointer;margin:0}
+.atlas-session-tree svg{flex-shrink:0}
+.atlas-session-tree button:focus-visible,.atlas-session-tree input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5c80ef);outline-offset:-2px}
+.atlas-tree-toolbar{display:flex;align-items:center;justify-content:space-between;height:32px;flex-shrink:0;padding-left:8px;color:var(--tree-muted);font-size:12px}
+.atlas-tree-toolbar>div{display:flex;gap:2px}
+.atlas-tree-toolbar button{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;color:var(--tree-muted)}
+.atlas-tree-toolbar button:hover,.atlas-tree-parent:hover,.atlas-tree-add:hover,.atlas-tree-footer button:hover{background:var(--tree-hover);color:var(--tree-text)}
+.atlas-tree-workspace{display:flex;align-items:center;gap:8px;padding:10px 8px 12px;font-size:14px;font-weight:600;min-width:0}
+.atlas-tree-workspace svg{color:var(--dsw-alias-brand-primary,#5c80ef)}
+.atlas-tree-workspace span,.atlas-tree-label,.atlas-tree-parent span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atlas-tree-body{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+.atlas-session-tree .atlas-tree-row{position:relative;display:flex;align-items:center;gap:8px;min-height:34px;width:100%;padding:6px 9px;text-align:left;border-radius:7px;color:var(--dsw-alias-label-secondary,#606977)}
+.atlas-tree-row svg{width:14px;height:14px;color:var(--tree-muted)}
+.atlas-session-tree .atlas-tree-open{display:flex;align-items:center;gap:8px;flex:1;min-width:0;padding:0;text-align:left;line-height:22px}
+.atlas-session-tree .atlas-tree-toggle{display:grid;place-items:center;width:20px;height:24px;flex-shrink:0;margin:-1px -3px;border-radius:4px}
+.atlas-tree-toggle:hover{background:var(--tree-hover)}
+.atlas-tree-toggle.collapsed svg{transform:rotate(-90deg)}
+.atlas-tree-row:hover{background:var(--tree-hover)}
+.atlas-session-tree .atlas-tree-row.selected{background:color-mix(in srgb,var(--tree-text) 7%,transparent);color:var(--tree-text);font-weight:500}
+.atlas-tree-label{flex:1;min-width:0}
+.atlas-tree-current{width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-brand-primary,#5c80ef);margin-right:4px;flex-shrink:0}
+.atlas-tree-children{position:relative;margin:2px 0 4px 15px;padding-left:13px;border-left:1px solid var(--tree-line)}
+.atlas-tree-branch{position:relative}
+.atlas-tree-branch:before{content:"";position:absolute;left:-13px;top:17px;width:9px;border-top:1px solid var(--tree-line)}
+.atlas-session-tree .atlas-tree-parent{display:flex;align-items:center;gap:8px;max-width:100%;padding:5px 9px;margin:0 0 6px;border-radius:6px;color:var(--tree-muted);font-size:12px}
+.atlas-session-tree .atlas-tree-add{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;margin-top:6px;border-radius:7px;color:var(--tree-muted);font-size:12px}
+.atlas-tree-footer{flex-shrink:0;margin-top:12px;padding-top:8px;border-top:1px solid var(--tree-line)}
+.atlas-tree-footer button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 9px;border-radius:6px;color:var(--tree-muted);font-size:12px}
+.atlas-tree-footer button svg:last-child{margin-left:auto;width:12px;transform:rotate(-90deg)}
+.atlas-tree-form{padding:10px;margin:6px 0;border:1px solid var(--tree-line);border-radius:8px;display:flex;flex-direction:column;gap:8px;font-size:12px}
+.atlas-tree-form label{color:var(--tree-muted);overflow-wrap:anywhere}
+.atlas-tree-form input{min-width:0;width:100%;border:1px solid var(--tree-line);border-radius:5px;padding:6px 8px;font:inherit;color:var(--tree-text);background:var(--dsw-alias-bg-layer-1,transparent)}
+.atlas-tree-form>div{display:flex;justify-content:flex-end;gap:6px}
+.atlas-tree-form button{padding:4px 8px;border-radius:5px}
+.atlas-tree-form button.primary{background:var(--tree-text);color:var(--dsw-alias-label-primary-inverted,#fff)}
+.atlas-session-tree .atlas-tree-context{display:flex;align-items:center;gap:6px;padding:5px 10px;margin:2px 8px 6px;border-radius:5px;background:var(--tree-hover);font-size:12px}
+.atlas-session-tree button:disabled{opacity:.45;cursor:default}
+.atlas-tree-notice{font-size:12px;padding:4px 8px;color:var(--tree-muted);overflow-wrap:anywhere}
+.atlas-session-tree [role=alert]{color:var(--dsw-alias-state-error-primary,#c43d3d)}
 .atlas-app{
   --atlas-bg:var(--dsw-alias-bg-base,#f7f8fa);
   --atlas-surface:var(--dsw-alias-bg-layer-1,#fff);

@@ -6,7 +6,7 @@ import { Canvas } from './Canvas.js'
 import { ChatSheet } from './ChatSheet.js'
 import { DEFAULT_SETTINGS, loadSettings, normalize, saveSettings, type AtlasSettings } from './settings.js'
 
-export function AtlasApp({ onExit }: { onExit?: () => void }) {
+export function AtlasApp({ onExit, onOpenSession }: { onExit?: () => void; onOpenSession?: (node: AtlasNode) => Promise<void> }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null)
   const [dataDir, setDataDir] = useState('')
@@ -113,6 +113,10 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
       void flushVisit()
       setThreadLoading(true)
       try {
+        if (onOpenSession) {
+          await onOpenSession(node)
+          return
+        }
         const result = await api.getThread(node.threadId)
         setThread(result.snapshot)
         visitRef.current = { nodeId: node.id, openedAt: Date.now() }
@@ -122,7 +126,7 @@ export function AtlasApp({ onExit }: { onExit?: () => void }) {
         setThreadLoading(false)
       }
     },
-    [flushVisit, showToast],
+    [flushVisit, showToast, onOpenSession],
   )
 
   const closeSheet = useCallback(() => {

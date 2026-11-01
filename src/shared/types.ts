@@ -39,6 +39,8 @@ export interface AtlasNode {
   mastery: number
   position: Point
   threadId: string
+  /** DSH 普通 Session 的绑定；旧 Atlas-native 节点没有此字段。 */
+  sessionId?: string
   createdAt: string
   updatedAt: string
   closedAt?: string

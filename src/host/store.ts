@@ -213,7 +213,9 @@ export class AtlasStore {
       const { workspaceId, nodes, node } = await this.findNode(nodeId)
       const next: AtlasNode = {
         ...node,
-        ...patch,
+        ...(patch.position === undefined ? {} : { position: patch.position }),
+        ...(patch.status === undefined ? {} : { status: patch.status }),
+        ...(patch.dueAt === undefined ? {} : { dueAt: patch.dueAt }),
         title: patch.title?.trim() || node.title,
         subtitle: patch.subtitle?.trim() ?? node.subtitle,
         mastery: patch.mastery === undefined ? node.mastery : clamp(Math.round(patch.mastery), 0, 5),
@@ -282,6 +284,28 @@ export class AtlasStore {
 
   async getNode(nodeId: string): Promise<AtlasNode> {
     return (await this.findNode(nodeId)).node
+  }
+
+  /** 将节点绑定到唯一 Session；重试同一绑定安全，禁止悄悄替换。 */
+  async bindSession(nodeId: string, sessionId: string): Promise<AtlasNode> {
+    if (!SAFE_ID.test(sessionId)) throw new Error('E_BAD_REQUEST: Session ID 不合法')
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId)
+      if (node.sessionId === sessionId) return node
+      if (node.sessionId) throw new Error('E_CONFLICT: 节点已经绑定其他 Session')
+      for (const workspace of await this.listWorkspaces()) {
+        const candidates = workspace.id === workspaceId
+          ? nodes
+          : JSON.parse(await readFile(this.nodesFile(workspace.id), 'utf8')) as AtlasNode[]
+        if (candidates.some((item) => item.sessionId === sessionId)) {
+          throw new Error('E_CONFLICT: Session 已绑定其他节点')
+        }
+      }
+      const next = { ...node, sessionId, updatedAt: new Date().toISOString() }
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map((item) => item.id === nodeId ? next : item))
+      await this.touch(workspaceId)
+      return next
+    })
   }
 
   async recordVisit(nodeId: string, openedAt: string, durationMs: number): Promise<AtlasNode> {
