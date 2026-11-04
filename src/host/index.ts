@@ -11,6 +11,7 @@ import { AtlasStore } from './store.js'
 import { AtlasModel } from './model.js'
 import { createAtlasRouter } from './routes.js'
 import { UpdateChecker } from './update.js'
+import { NodeSessions } from './sessions.js'
 
 export interface AtlasConfig {
   /** 留空时自动选择第一个可用 provider。 */
@@ -27,7 +28,7 @@ export interface AtlasConfig {
   updateBranch?: string
 }
 
-export const inject = ['webServer', 'llm', 'agentDefaultModel']
+export const inject = ['webServer', 'llm', 'agentDefaultModel', 'sessionController', 'workspaceRegistry', 'agents', 'sessionQuery']
 
 export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
   const store = new AtlasStore(config.dataDir)
@@ -39,6 +40,9 @@ export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
     dataDir: store.location,
     modelHint: config.model ?? 'auto',
     checkUpdate: (force) => updates.check(force),
+    nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry),
+    sessionQuery: ctx.sessionQuery,
+    isSessionRunning: id => ctx.agents?.get(id)?.status === 'running',
   })
 
   ctx.effect(

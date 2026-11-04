@@ -27,6 +27,8 @@ import type {
   VisitInput,
 } from '../shared/types.js'
 import { ATLAS_BASE, LIMITS } from '../shared/protocol.js'
+import type { NodeSessions } from './sessions.js'
+import type { HostContext } from '../shared/dsh.js'
 
 interface RequestLike {
   method?: string
@@ -45,6 +47,9 @@ interface ResponseLike {
 }
 
 export interface RouterDeps {
+  isSessionRunning?: (id: string) => boolean
+  nodeSessions?: NodeSessions
+  sessionQuery?: HostContext['sessionQuery']
   store: AtlasStore
   model: AtlasModel
   dataDir: string
@@ -72,6 +77,50 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
   }
   const path = segments.slice(2)
   const method = (req.method ?? 'GET').toUpperCase()
+  if (path.length === 1 && path[0] === 'trash') {
+    allow(method, ['GET'])
+    await deps.store.migrateSessionLinks().catch(() => undefined)
+    const archived = new Set(deps.nodeSessions?.archivedSessionIds ?? [])
+    const nodes = (await deps.store.deletedNodes(true)).map(n => n.sessionId && archived.has(n.sessionId) && !n.sessionArchivedAt ? { ...n, sessionId: undefined } : n)
+    const sessionIds = [...new Set(nodes.map(n => n.sessionId).filter((id): id is string => !!id))]
+    if (sessionIds.length && deps.sessionQuery) {
+      let titles: Record<string, string | null> = {}
+      try { titles = await deps.sessionQuery.readTitleSnapshots(sessionIds) } catch { /* 冷会话或服务不可用时回退节点标题 */ }
+      for (const node of nodes) {
+        const title = node.sessionId ? titles[node.sessionId] : undefined
+        if (title) node.sessionTitle = title
+      }
+    }
+    const sessions = await deps.store.listSessions(archived)
+    if (deps.sessionQuery && sessions.length) {
+      const ids = sessions.map(s => s.sessionId)
+      let titles: Record<string, string | null> = {}
+      try { titles = await deps.sessionQuery.readTitleSnapshots(ids) } catch { /* 回退节点标题快照 */ }
+      for (const s of sessions) {
+        const t = titles[s.sessionId]
+        if (t) s.title = t
+      }
+    }
+    return send(res, 200, { version: 8, nodes, sessions })
+  }
+  if (path.length === 2 && path[0] === 'trash' && path[1] === 'purge') {
+    allow(method, ['POST'])
+    const body = await readJson<{ targets: Array<{ id: string; batchId: string }> }>(req)
+    if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 工作区服务不可用')
+    return send(res, 200, { purged: await deps.store.purgeNodes(body.targets, ids => deps.nodeSessions!.removeWorkspaces(ids, deps.isSessionRunning)) })
+  }
+  if (path.length === 2 && path[0] === 'trash' && path[1] === 'sessions') {
+    allow(method, ['POST'])
+    const body = await readJson<{ sessionIds: string[] }>(req)
+    if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 会话服务不可用')
+    if (!Array.isArray(body.sessionIds) || !body.sessionIds.length || body.sessionIds.length > 500 || body.sessionIds.some(id => typeof id !== 'string' || !id)) throw new Error('E_BAD_REQUEST: 会话范围无效')
+    const results = []
+    for (const sessionId of new Set(body.sessionIds)) {
+      await deps.nodeSessions.archiveStoredSession(sessionId, deps.isSessionRunning)
+      results.push(sessionId)
+    }
+    return send(res, 200, { archived: results })
+  }
 
   // GET /update ─ 版本检测（不自动安装）
   if (path.length === 1 && path[0] === 'update') {
@@ -79,9 +128,19 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     return send(res, 200, await deps.checkUpdate(url.searchParams.get('force') === '1'))
   }
 
+  // POST /unarchive-session ─ 按 Session ID 恢复归档会话（不依赖 Node ID）
+  if (path.length === 1 && path[0] === 'unarchive-session') {
+    allow(method, ['POST'])
+    if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 会话服务不可用')
+    const body = await readJson<{ sessionId: string }>(req)
+    if (!body.sessionId) throw new Error('E_BAD_REQUEST: 需要 sessionId')
+    return send(res, 200, await deps.nodeSessions.unarchiveSession(body.sessionId, deps.isSessionRunning))
+  }
+
   // GET /bootstrap ─ 首次进入：工作区列表 + 当前快照
   if (path.length === 1 && path[0] === 'bootstrap') {
     allow(method, ['GET'])
+    await deps.store.migrateSessionLinks().catch(() => undefined)
     const workspace = await deps.store.ensureWorkspace()
     const [workspaces, snapshot] = await Promise.all([
       deps.store.listWorkspaces(),
@@ -109,7 +168,9 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     const workspaceId = decode(path[1]!)
     if (path.length === 2) {
       allow(method, ['GET', 'PATCH'])
-      if (method === 'GET') return send(res, 200, { snapshot: await deps.store.snapshot(workspaceId) })
+      if (method === 'GET') {
+        return send(res, 200, { snapshot: await deps.store.snapshot(workspaceId) })
+      }
 
       const body = await readJson<{ name?: string; goal?: string; active?: boolean }>(req)
       if (body.active) await deps.store.setActive(workspaceId)
@@ -141,6 +202,54 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     }
 
     const nodeId = decode(path[1]!)
+    if (path.length === 3 && path[2] === 'delete-preview') {
+      allow(method, ['GET'])
+      return send(res, 200, await deps.store.deletionPreview(nodeId))
+    }
+    if (path.length === 3 && path[2] === 'restore') {
+      allow(method, ['POST'])
+      const restored = await deps.store.restoreNode(nodeId)
+      for (const id of restored) {
+        if ((await deps.store.getNode(id)).sessionId) await deps.nodeSessions?.restoreWorkspace(id)
+      }
+      return send(res, 200, { restored })
+    }
+    if (path.length === 3 && path[2] === 'purge') {
+      allow(method, ['POST'])
+      const body = await readJson<{ batchId: string }>(req)
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 工作区服务不可用')
+      return send(res, 200, { purged: await deps.store.purgeNode(nodeId, body.batchId, ids => deps.nodeSessions!.removeWorkspaces(ids, deps.isSessionRunning)) })
+    }
+    if (path.length === 3 && path[2] === 'retained-session') {
+      allow(method, ['POST'])
+      const node = (await deps.store.deletedNodes(true)).find(item => item.id === nodeId && item.sessionId)
+      if (!node?.sessionId) throw new Error('E_BAD_REQUEST: 该节点没有保留会话')
+      if (deps.nodeSessions?.archivedSessionIds.includes(node.sessionId)) throw new Error('E_CONFLICT: 该会话已移入 DSH 原生归档')
+      return send(res, 200, { node, sessionId: node.sessionId })
+    }
+    if (path.length === 3 && path[2] === 'session') {
+      allow(method, ['POST'])
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH Session 服务不可用')
+      return send(res, 200, { node: await deps.nodeSessions.open(nodeId) })
+    }
+    if (path.length === 3 && path[2] === 'session-state') {
+      allow(method, ['GET'])
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH Session 服务不可用')
+      return send(res, 200, await deps.nodeSessions.sessionState(nodeId))
+    }
+    if (path.length === 3 && path[2] === 'new-session') {
+      allow(method, ['POST'])
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH Session 服务不可用')
+      const body = await readJson<{ expectedSessionId: string }>(req)
+      return send(res, 200, { node: await deps.nodeSessions.startNew(nodeId, body.expectedSessionId) })
+    }
+    if (path.length === 3 && path[2] === 'archive-session') {
+      allow(method, ['POST'])
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 会话服务不可用')
+      const body = await readJson<{ sessionId: string }>(req)
+      if (!body.sessionId) throw new Error('E_BAD_REQUEST: 需要 sessionId')
+      return send(res, 200, { node: await deps.nodeSessions.archiveSession(nodeId, body.sessionId, deps.isSessionRunning) })
+    }
     if (path.length === 2) {
       allow(method, ['PATCH', 'DELETE'])
       if (method === 'PATCH') {
@@ -148,7 +257,19 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
         const node = await deps.store.updateNode(nodeId, body)
         return send(res, 200, { node })
       }
-      const deleted = await deps.store.deleteNode(nodeId)
+      const body = await readJson<{ token: string }>(req)
+      const target = await deps.store.getNode(nodeId, true)
+      if (target.deletedAt) {
+        if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 会话服务不可用')
+        return send(res, 200, { deleted: await deps.nodeSessions.deleteNode(nodeId, body.token, deps.isSessionRunning) })
+      }
+      const preview = await deps.store.deletionPreview(nodeId)
+      if (preview.nodes.some(n => deps.nodeSessions?.isOpening(n.id))) throw new Error('E_CONFLICT: 会话正在打开，请稍后重试')
+      if (preview.nodes.some(n => n.sessionId && deps.isSessionRunning?.(n.sessionId))) {
+        throw new Error('E_CONFLICT: 子树中仍有正在运行的会话，请先停止后重试')
+      }
+      if (!deps.nodeSessions) throw new Error('E_UNSUPPORTED: DSH 会话服务不可用')
+      const deleted = await deps.nodeSessions.deleteNode(nodeId, body.token, deps.isSessionRunning)
       return send(res, 200, { deleted })
     }
 
@@ -260,6 +381,7 @@ async function turn(req: RequestLike, res: ResponseLike, deps: RouterDeps, threa
   if (text.length > LIMITS.maxMessageChars) throw new Error('E_BUDGET: 单条消息过长')
 
   const snapshot = await deps.store.getThread(threadId)
+  if (snapshot.node.sessionId) throw new Error('E_UNSUPPORTED: 此节点已绑定 DSH Session，请在原生聊天中发送消息')
   const { workspace, node } = snapshot
 
   const userMessage = await deps.store.appendMessage(threadId, 'user', text, body.quote)
@@ -394,6 +516,7 @@ function statusOf(code: AtlasErrorCode): number {
     case 'E_AUTH':
       return 401
     case 'E_CONFLICT':
+    case 'E_SESSION_ARCHIVED':
       return 409
     case 'E_BUDGET':
       return 413

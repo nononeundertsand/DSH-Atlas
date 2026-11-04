@@ -37,9 +37,10 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "smoke": "node tests/smoke.mjs",
-    "check": "npm run typecheck && npm run build && npm run smoke",
+    "check": "npm run typecheck && npm run build && npm run smoke && node tests/session-routing.mjs && node tests/node-trash.mjs",
     "release:patch": "npm version patch --no-git-tag-version && npm run check",
-    "dev": "node scripts/build.mjs --watch"
+    "dev": "node scripts/build.mjs --watch",
+    "test:dsh": "node tests/dsh-fixture/session.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2"

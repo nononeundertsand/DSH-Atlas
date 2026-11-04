@@ -18,6 +18,7 @@ import { Mastery } from './Mastery.js'
 import { formatDuration, formatRelativeTime } from './format.js'
 
 export interface ChatSheetProps {
+  readOnly?: boolean
   snapshot: ThreadSnapshot
   onBack: () => void
   onNodeChanged: (node: AtlasNode) => void
@@ -35,7 +36,7 @@ interface ExplainState {
   error?: string
 }
 
-export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, onDeleted, onToast }: ChatSheetProps) {
+export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, onDeleted, onToast, readOnly = false }: ChatSheetProps) {
   const [node, setNode] = useState(snapshot.node)
   const [title, setTitle] = useState(snapshot.node.title)
   const [messages, setMessages] = useState(snapshot.messages)
@@ -105,7 +106,7 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
     turnQuote: MessageQuote | undefined,
     target: { kind: 'main' } | { kind: 'sub'; id: string },
   ) => {
-    if (sendingRef.current) return
+    if (readOnly || sendingRef.current) return
     sendingRef.current = true
     const key = target.kind === 'main' ? 'main' : target.id
     const user: AtlasMessage = {
@@ -215,6 +216,7 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
   }
 
   const closeNode = async () => {
+    if (readOnly) return
     if (closing) return
     setClosing(true)
     try {
@@ -319,7 +321,8 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
   const remove = async () => {
     if (!window.confirm(`删除节点「${node.title}」及其所有子节点？`)) return
     try {
-      await api.deleteNode(node.id)
+      const preview = await api.deletePreview(node.id)
+      await api.deleteNode(node.id, preview.token)
       onDeleted(node.id)
     } catch (error) {
       onToast(error instanceof Error ? error.message : '删除失败')
@@ -360,10 +363,10 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
             </div>
           </div>
           <div className="atlas-head-actions">
-            <button type="button" className="atlas-paper-btn primary" onClick={closeNode} disabled={closing || Boolean(sending)}>
+            <button type="button" className="atlas-paper-btn primary" onClick={closeNode} disabled={readOnly || closing || Boolean(sending)}>
               {closing ? '收口中…' : card ? '重新收口' : '收口'}
             </button>
-            <button type="button" className="atlas-paper-btn danger" onClick={remove} title="删除节点">
+            <button type="button" className="atlas-paper-btn danger" onClick={remove} disabled={readOnly} title="删除节点">
               删除
             </button>
             <button type="button" className="atlas-paper-btn" onClick={onBack} title="返回画布（Esc）">
@@ -543,6 +546,7 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
           {quote ? <QuoteView quote={quote} onRemove={() => setQuote(null)} /> : null}
           <div className="atlas-composer">
             <textarea
+              disabled={readOnly}
               ref={composerRef}
               value={draft}
               placeholder="问这一节点范围内的问题…"
@@ -560,12 +564,12 @@ export function ChatSheet({ snapshot, onBack, onNodeChanged, onSnapshotStale, on
                 }
               }}
             />
-            <button type="button" className="atlas-send" onClick={sendMain} disabled={!draft.trim() || sending === 'main'} title="发送（Enter）">
+            <button type="button" className="atlas-send" onClick={sendMain} disabled={readOnly || !draft.trim() || sending === 'main'} title="发送（Enter）">
               ↑
             </button>
           </div>
           <div className="atlas-composer-hint">
-            <span>Enter 发送 · Shift+Enter 换行 · Esc 回到地图</span>
+            <span>{readOnly ? '旧 Atlas 对话 · 只读历史' : 'Enter 发送 · Shift+Enter 换行 · Esc 回到地图'}</span>
             <span>{sending ? '正在生成…' : '收口后节点会变绿'}</span>
           </div>
         </footer>

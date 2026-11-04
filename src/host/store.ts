@@ -14,7 +14,7 @@
  */
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import {
   type AtlasMessage,
@@ -26,6 +26,9 @@ import {
   type Role,
   type Thread,
   type ThreadSnapshot,
+  type LibraryItem,
+  type NodeSessionLink,
+  type SessionRecord,
   type Viewport,
   type Workspace,
   type WorkspaceSnapshot,
@@ -142,8 +145,8 @@ export class AtlasStore {
     ])
     return {
       workspace,
-      nodes: nodes ?? [],
-      threads: (threads ?? []).filter((thread) => thread.kind === 'main'),
+      nodes: (nodes ?? []).filter(node => !node.deletedAt),
+      threads: (threads ?? []).filter((thread) => thread.kind === 'main' && (nodes ?? []).some(node => node.id === thread.nodeId && !node.deletedAt)),
       viewport: viewport ?? { ...DEFAULT_VIEWPORT },
       rev: workspace.rev,
     }
@@ -200,7 +203,8 @@ export class AtlasStore {
         collapsed: false,
         createdAt: now,
       }
-      await this.writeJson(this.nodesFile(input.workspaceId), [...snapshot.nodes, node])
+      const allNodes = (await this.readJson<AtlasNode[]>(this.nodesFile(input.workspaceId))) ?? []
+      await this.writeJson(this.nodesFile(input.workspaceId), [...allNodes, node])
       const threads = (await this.readJson<Thread[]>(this.threadsFile(input.workspaceId))) ?? []
       await this.writeJson(this.threadsFile(input.workspaceId), [...threads, thread])
       await this.touch(input.workspaceId)
@@ -213,7 +217,9 @@ export class AtlasStore {
       const { workspaceId, nodes, node } = await this.findNode(nodeId)
       const next: AtlasNode = {
         ...node,
-        ...patch,
+        ...(patch.position === undefined ? {} : { position: patch.position }),
+        ...(patch.status === undefined ? {} : { status: patch.status }),
+        ...(patch.dueAt === undefined ? {} : { dueAt: patch.dueAt }),
         title: patch.title?.trim() || node.title,
         subtitle: patch.subtitle?.trim() ?? node.subtitle,
         mastery: patch.mastery === undefined ? node.mastery : clamp(Math.round(patch.mastery), 0, 5),
@@ -225,24 +231,181 @@ export class AtlasStore {
     })
   }
 
-  async deleteNode(nodeId: string): Promise<string[]> {
-    return this.mutate(async () => {
-      const { workspaceId, nodes } = await this.findNode(nodeId)
-      const doomed = descendantsOf(nodeId, nodes)
-      const doomedSet = new Set(doomed)
-      const threads = (await this.readJson<Thread[]>(this.threadsFile(workspaceId))) ?? []
-      const doomedThreads = threads.filter((thread) => doomedSet.has(thread.nodeId))
+  async deletionPreview(nodeId: string): Promise<{ nodes: AtlasNode[]; token: string }> {
+    const { nodes } = await this.findNode(nodeId)
+    const ids = new Set(descendantsOf(nodeId, nodes))
+    return { nodes: nodes.filter(node => ids.has(node.id) && !node.deletedAt), token: nodesToken(nodes) }
+  }
 
-      await this.writeJson(this.nodesFile(workspaceId), nodes.filter((node) => !doomedSet.has(node.id)))
-      await this.writeJson(this.threadsFile(workspaceId), threads.filter((thread) => !doomedSet.has(thread.nodeId)))
-      await Promise.all(
-        doomedThreads.map(async (thread) => {
-          await rm(this.threadFile(workspaceId, thread.id), { force: true })
-        }),
-      )
-      await Promise.all(doomed.map((id) => rm(this.cardFile(workspaceId, id), { force: true })))
+  async deletedNodes(includeHidden = false): Promise<LibraryItem[]> {
+    const results: LibraryItem[] = []
+    const existing = new Set<string>()
+    for (const workspace of await this.listWorkspaces()) {
+      const nodes = (await this.readJson<AtlasNode[]>(this.nodesFile(workspace.id))) ?? []
+      for (const node of nodes) existing.add(node.id)
+      const byId = new Map(nodes.map(node => [node.id, node]))
+      // 已删除节点 + 手动归档会话（节点仍在，仅打 sessionArchivedAt）。
+      for (const node of nodes.filter(node => node.deletedAt || node.sessionArchivedAt)) {
+        const pathTitles: string[] = []
+        const visited = new Set<string>()
+        let item: AtlasNode | undefined = node
+        let pathComplete = true
+        while (item) {
+          if (visited.has(item.id)) { pathComplete = false; break }
+          visited.add(item.id)
+          pathTitles.unshift(item.title)
+          if (!item.parentId) break
+          const parent = byId.get(item.parentId)
+          if (!parent) { pathComplete = false; break }
+          item = parent
+        }
+        results.push({ ...node, workspaceName: workspace.name, pathTitles, pathComplete })
+      }
+    }
+    const archived = await this.readRetainedSessions()
+    const hidden = (await this.readJson<string[]>(join(this.root, 'hidden-sessions.json'))) ?? []
+    return [...results, ...archived.filter(node => !existing.has(node.id))].map(node => !includeHidden && hidden.includes(node.id) ? { ...node, sessionId: undefined } : node)
+  }
+
+  /**
+   * 会话页数据：历史来源 + 当前绑定合并，归档状态由调用方传入的 DSH 原生集合决定。
+   * @param archivedSessionIds DSH 原生归档集合（事实来源）。
+   */
+  async listSessions(archivedSessionIds: Set<string>): Promise<SessionRecord[]> {
+    const links = await this.listSessionLinks()
+    const currentBySession = new Map<string, { nodeId: string; workspaceId: string }>()
+    const workspaceNames = new Map<string, string>()
+    const nodeTitles = new Map<string, string>()
+    for (const workspace of await this.listWorkspaces()) {
+      workspaceNames.set(workspace.id, workspace.name)
+      const nodes = (await this.readJson<AtlasNode[]>(this.nodesFile(workspace.id))) ?? []
+      for (const node of nodes) {
+        nodeTitles.set(node.id, node.title)
+        if (node.sessionId) currentBySession.set(node.sessionId, { nodeId: node.id, workspaceId: workspace.id })
+      }
+    }
+    const records: SessionRecord[] = []
+    const seen = new Set<string>()
+    for (const link of links) {
+      seen.add(link.sessionId)
+      const current = currentBySession.get(link.sessionId)
+      records.push({
+        sessionId: link.sessionId,
+        originNodeId: link.originNodeId,
+        originWorkspaceId: link.originWorkspaceId,
+        workspaceName: workspaceNames.get(link.originWorkspaceId),
+        nodeTitle: link.nodeTitleSnapshot,
+        title: link.nodeTitleSnapshot,
+        isCurrent: !!current,
+        currentNodeId: current?.nodeId,
+        archived: archivedSessionIds.has(link.sessionId),
+        archivedAt: link.archivedAt,
+      })
+    }
+    // 当前绑定但尚无来源记录（例如绑定写入前旧数据）也列出。
+    for (const [sessionId, current] of currentBySession) {
+      if (seen.has(sessionId)) continue
+      records.push({
+        sessionId,
+        originNodeId: current.nodeId,
+        originWorkspaceId: current.workspaceId,
+        workspaceName: workspaceNames.get(current.workspaceId),
+        nodeTitle: nodeTitles.get(current.nodeId) ?? current.nodeId,
+        title: nodeTitles.get(current.nodeId) ?? current.nodeId,
+        isCurrent: true,
+        currentNodeId: current.nodeId,
+        archived: archivedSessionIds.has(sessionId),
+      })
+    }
+    return records
+  }
+
+  async dismissSessions(ids: string[], archive?: (sessionIds: string[]) => Promise<void>): Promise<void> {
+    return this.mutate(async () => {
+      if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some(id => typeof id !== 'string')) throw new Error('E_BAD_REQUEST: 会话范围无效')
+      const records = (await this.deletedNodes(true)).filter(n => n.sessionId)
+      const available = new Set(records.map(n => n.id))
+      if (ids.some(id => !available.has(id))) throw new Error('E_CONFLICT: 会话列表已变化，请刷新后重试')
+      await archive?.(records.filter(n => ids.includes(n.id)).map(n => n.sessionId!))
+      const file = join(this.root, 'hidden-sessions.json')
+      const hidden = (await this.readJson<string[]>(file)) ?? []
+      await this.writeJson(file, [...new Set([...hidden, ...ids])])
+    })
+  }
+
+  async purgeNode(nodeId: string, batchId: string, cleanup?: (ids: string[]) => Promise<void>): Promise<string[]> {
+    return this.purgeNodes([{ id: nodeId, batchId }], cleanup)
+  }
+
+  async purgeNodes(targets: Array<{ id: string; batchId: string }>, cleanup?: (ids: string[]) => Promise<void>): Promise<string[]> {
+    return this.mutate(async () => {
+      if (!Array.isArray(targets) || !targets.length || targets.length > 500) throw new Error('E_BAD_REQUEST: 删除范围无效')
+      const plans = new Map<string, { nodes: AtlasNode[]; ids: Set<string> }>()
+      for (const { id: nodeId, batchId } of targets) {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId, true)
+      if (!node.deletedAt || !node.deletionBatchId || node.deletionRootId !== nodeId || node.deletionBatchId !== batchId) throw new Error('E_CONFLICT: 删除批次已变化，请刷新后重试')
+      const batch = nodes.filter(n => n.deletionBatchId === batchId)
+      const ids = new Set(batch.map(n => n.id))
+      const plan = plans.get(workspaceId) ?? { nodes, ids: new Set<string>() }
+      for (const id of ids) plan.ids.add(id)
+      plans.set(workspaceId, plan)
+      }
+      for (const { nodes, ids } of plans.values()) {
+        if (nodes.some(n => !ids.has(n.id) && n.parentId && ids.has(n.parentId))) throw new Error('E_CONFLICT: 此节点下仍有其他批次的节点，请先恢复或彻底删除它们')
+      }
+      const ids = new Set([...plans.values()].flatMap(plan => [...plan.ids]))
+      await cleanup?.([...ids])
+      const file = join(this.root, 'retained-sessions.json')
+      const archived = await this.readRetainedSessions()
+      const items = (await this.deletedNodes(true)).filter(n => ids.has(n.id) && n.sessionId).map(n => ({ id: n.id, workspaceId: n.workspaceId, workspaceName: n.workspaceName, title: n.title, sessionId: n.sessionId, deletedAt: n.deletedAt, pathTitles: n.pathTitles, pathComplete: n.pathComplete, purgedAt: new Date().toISOString() }))
+      await this.writeJson(file, [...archived.filter(n => !ids.has(n.id)), ...items])
+      for (const [workspaceId, plan] of plans) {
+        await this.writeJson(this.nodesFile(workspaceId), plan.nodes.filter(n => !plan.ids.has(n.id)))
+        await this.touch(workspaceId)
+      }
+      return [...ids]
+    })
+  }
+
+  async deleteNode(nodeId: string, token: string, beforeDelete?: (nodes: AtlasNode[]) => Promise<void>): Promise<string[]> {
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId, true)
+      if (node.deletedAt) {
+        const batch = nodes.filter(n => n.deletionBatchId === node.deletionBatchId)
+        await beforeDelete?.(batch)
+        return batch.map(n => n.id)
+      }
+      if (token !== nodesToken(nodes)) throw new Error('E_CONFLICT: 节点已发生变化，请重新确认删除范围')
+      const ids = new Set(descendantsOf(nodeId, nodes))
+      const targets = nodes.filter(n => ids.has(n.id) && !n.deletedAt)
+      await beforeDelete?.(targets)
+      const deletedAt = new Date().toISOString()
+      const deletionBatchId = randomUUID()
+      const targetIds = new Set(targets.map(n => n.id))
+      // 删除节点只进回收站并解除工作区分组；绑定关系与 Session 保留（进入 DSH 未分组），不归档。
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map(n => targetIds.has(n.id)
+        ? { ...n, deletedAt, deletionBatchId, deletionRootId: nodeId } : n))
       await this.touch(workspaceId)
-      return doomed
+      return [...targetIds]
+    })
+  }
+
+  async restoreNode(nodeId: string): Promise<string[]> {
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId, true)
+      if (!node.deletedAt) return []
+      const batch = nodes.filter(n => n.deletionBatchId === node.deletionBatchId)
+      const ids = new Set(batch.map(n => n.id))
+      if (batch.some(n => n.parentId && !ids.has(n.parentId) && !nodes.some(parent => parent.id === n.parentId && !parent.deletedAt))) {
+        throw new Error('E_CONFLICT: 请先恢复父节点所在的删除批次')
+      }
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map(n => {
+        if (!ids.has(n.id)) return n
+        const { deletedAt, deletionBatchId, deletionRootId, ...rest } = n
+        return rest
+      }))
+      await this.touch(workspaceId)
+      return [...ids]
     })
   }
 
@@ -280,8 +443,125 @@ export class AtlasStore {
     }
   }
 
-  async getNode(nodeId: string): Promise<AtlasNode> {
-    return (await this.findNode(nodeId)).node
+  async getNode(nodeId: string, includeDeleted = false): Promise<AtlasNode> {
+    return (await this.findNode(nodeId, includeDeleted)).node
+  }
+
+  /** 用户显式新建，先持久化新身份；失败重试不复用旧历史。旧会话来源记录保留。 */
+  async replaceSession(nodeId: string, expectedSessionId: string): Promise<AtlasNode> {
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId)
+      if (node.replacedSessionId === expectedSessionId && node.sessionId !== expectedSessionId) return node
+      // 节点当前无绑定（归档已清空）且 expectedSessionId 是已知历史来源 → 允许新建。
+      const links = await this.listSessionLinks()
+      const isKnownHistorical = links.some(l => l.sessionId === expectedSessionId)
+      if (!expectedSessionId || (node.sessionId && node.sessionId !== expectedSessionId)) {
+        if (!(node.sessionId === undefined && isKnownHistorical)) {
+          throw new Error('E_CONFLICT: 会话绑定已变化，请重新打开节点')
+        }
+      }
+      const { sessionArchivedAt, ...retained } = node
+      const next = { ...retained, sessionId: `atlas-${node.id}-${shortId()}`, replacedSessionId: expectedSessionId, updatedAt: new Date().toISOString() }
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map(n => n.id === nodeId ? next : n))
+      await this.touch(workspaceId)
+      // 旧会话来源保留为历史来源（若尚未记录）。
+      const currentLinks = await this.listSessionLinks()
+      const toAdd: NodeSessionLink[] = []
+      if (!currentLinks.some(l => l.sessionId === expectedSessionId)) {
+        toAdd.push({ sessionId: expectedSessionId, originNodeId: nodeId, originWorkspaceId: workspaceId, nodeTitleSnapshot: node.title, archivedAt: sessionArchivedAt, createdAt: new Date().toISOString() })
+      }
+      if (!currentLinks.some(l => l.sessionId === next.sessionId)) {
+        toAdd.push({ sessionId: next.sessionId, originNodeId: nodeId, originWorkspaceId: workspaceId, nodeTitleSnapshot: node.title, createdAt: new Date().toISOString() })
+      }
+      if (toAdd.length) await this.writeJson(this.linksFile(), [...currentLinks, ...toAdd])
+      return next
+    })
+  }
+
+  /** 将节点绑定到唯一 Session；普通绑定禁止替换已有身份。 */
+  async bindSession(nodeId: string, sessionId: string, runtimeWorkspaceId?: string): Promise<AtlasNode> {
+    if (!SAFE_ID.test(sessionId)) throw new Error('E_BAD_REQUEST: Session ID 不合法')
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId)
+      if (node.sessionId === sessionId && (!runtimeWorkspaceId || node.runtimeWorkspaceId === runtimeWorkspaceId)) return node
+      if (node.sessionId && node.sessionId !== sessionId) throw new Error('E_CONFLICT: 节点已经绑定其他 Session')
+      for (const workspace of await this.listWorkspaces()) {
+        const candidates = workspace.id === workspaceId
+          ? nodes
+          : JSON.parse(await readFile(this.nodesFile(workspace.id), 'utf8')) as AtlasNode[]
+        if (candidates.some((item) => item.id !== nodeId && item.sessionId === sessionId)) {
+          throw new Error('E_CONFLICT: Session 已绑定其他节点')
+        }
+      }
+      const next = { ...node, sessionId, ...(runtimeWorkspaceId ? { runtimeWorkspaceId } : {}), updatedAt: new Date().toISOString() }
+      await this.writeJson(this.nodesFile(workspaceId), nodes.map((item) => item.id === nodeId ? next : item))
+      await this.touch(workspaceId)
+      // 记录历史来源（幂等，不覆盖更早来源）。
+      const links = await this.listSessionLinks()
+      if (!links.some(l => l.sessionId === sessionId)) {
+        await this.writeJson(this.linksFile(), [...links, {
+          sessionId,
+          originNodeId: nodeId,
+          originWorkspaceId: workspaceId,
+          nodeTitleSnapshot: node.title,
+          createdAt: new Date().toISOString(),
+        }])
+      }
+      return next
+    })
+  }
+
+  /**
+   * 归档会话（节点保留）：显式指定 sessionId，把该会话从节点当前绑定腾空，
+   * 并在历史来源记录上打归档标记。节点保留，sessionId 字段清空。
+   */
+  async archiveSession(nodeId: string, sessionId: string): Promise<AtlasNode> {
+    if (!SAFE_ID.test(sessionId)) throw new Error('E_BAD_REQUEST: Session ID 不合法')
+    return this.mutate(async () => {
+      const { workspaceId, nodes, node } = await this.findNode(nodeId, true)
+      if (node.sessionId && node.sessionId !== sessionId) throw new Error('E_CONFLICT: 节点当前绑定的是其他会话')
+      if (node.sessionId === sessionId) {
+        const next: AtlasNode = {
+          ...node,
+          sessionId: undefined,
+          sessionArchivedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+        await this.writeJson(this.nodesFile(workspaceId), nodes.map((item) => (item.id === nodeId ? next : item)))
+        await this.touch(workspaceId)
+        await this.markSessionLinkArchivedUnsafe(sessionId, next.sessionArchivedAt!)
+        return next
+      }
+      // 节点当前无绑定，仍记录来源与归档状态。
+      await this.markSessionLinkArchivedUnsafe(sessionId, new Date().toISOString())
+      return node
+    })
+  }
+
+  /**
+   * 恢复归档会话：显式指定 sessionId 取消归档标记。
+   * 仅当来源节点存在、未删除且当前无会话时才自动回绑；否则只恢复历史来源的可用性。
+   */
+  async unarchiveSession(sessionId: string): Promise<{ nodeId?: string; rebound: boolean }> {
+    if (!SAFE_ID.test(sessionId)) throw new Error('E_BAD_REQUEST: Session ID 不合法')
+    return this.mutate(async () => {
+      await this.clearSessionLinkArchivedUnsafe(sessionId)
+      const link = (await this.listSessionLinks()).find(l => l.sessionId === sessionId)
+      if (!link) return { rebound: false }
+      let found: { workspaceId: string; nodes: AtlasNode[]; node: AtlasNode }
+      try { found = await this.findNode(link.originNodeId, true) }
+      catch { return { nodeId: link.originNodeId, rebound: false } }
+      const { workspaceId, nodes, node } = found
+      if (node.deletedAt) return { nodeId: node.id, rebound: false }
+      if (node.sessionId && node.sessionId !== sessionId) return { nodeId: node.id, rebound: false }
+      if (!node.sessionId) {
+        const next: AtlasNode = { ...node, sessionId, sessionArchivedAt: undefined, updatedAt: new Date().toISOString() }
+        await this.writeJson(this.nodesFile(workspaceId), nodes.map((item) => (item.id === node.id ? next : item)))
+        await this.touch(workspaceId)
+        return { nodeId: node.id, rebound: true }
+      }
+      return { nodeId: node.id, rebound: false }
+    })
   }
 
   async recordVisit(nodeId: string, openedAt: string, durationMs: number): Promise<AtlasNode> {
@@ -445,11 +725,11 @@ export class AtlasStore {
 
   // ── 内部：读取与写入 ──────────────────────────────────────────────────────
 
-  private async findNode(nodeId: string): Promise<{ workspaceId: string; nodes: AtlasNode[]; node: AtlasNode }> {
+  private async findNode(nodeId: string, includeDeleted = false): Promise<{ workspaceId: string; nodes: AtlasNode[]; node: AtlasNode }> {
     for (const workspace of await this.listWorkspaces()) {
       const nodes = (await this.readJson<AtlasNode[]>(this.nodesFile(workspace.id))) ?? []
       const node = nodes.find((item) => item.id === nodeId)
-      if (node) return { workspaceId: workspace.id, nodes, node }
+      if (node && (includeDeleted || !node.deletedAt)) return { workspaceId: workspace.id, nodes, node }
     }
     throw new Error('E_NOT_FOUND: 节点不存在')
   }
@@ -461,7 +741,7 @@ export class AtlasStore {
       if (!thread) continue
       const nodes = (await this.readJson<AtlasNode[]>(this.nodesFile(workspace.id))) ?? []
       const node = nodes.find((item) => item.id === thread.nodeId)
-      if (node) return { workspaceId: workspace.id, thread, node }
+      if (node && !node.deletedAt) return { workspaceId: workspace.id, thread, node }
     }
     throw new Error('E_NOT_FOUND: 线程不存在')
   }
@@ -502,6 +782,92 @@ export class AtlasStore {
     } catch {
       return undefined
     }
+  }
+
+  private async readRetainedSessions(): Promise<LibraryItem[]> {
+    let text: string
+    try { text = await readFile(join(this.root, 'retained-sessions.json'), 'utf8') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+    const records: unknown = JSON.parse(text)
+    if (!Array.isArray(records)) throw new Error('E_INTERNAL: 会话归档格式无效')
+    return records as LibraryItem[]
+  }
+
+  // ── 历史会话来源记录 ────────────────────────────────────────────────────
+  // 独立于节点当前绑定，按 Session ID 保存，不被新建会话覆盖。
+
+  private linksFile(): string {
+    return join(this.root, 'session-links.json')
+  }
+
+  async listSessionLinks(): Promise<NodeSessionLink[]> {
+    return (await this.readJson<NodeSessionLink[]>(this.linksFile())) ?? []
+  }
+
+  /** 记录一条历史来源（幂等：同一 sessionId 不重复，保留最早来源）。非 mutate，需在 writeQueue 内调用。 */
+  private async recordSessionLinkUnsafe(link: NodeSessionLink): Promise<void> {
+    const links = await this.listSessionLinks()
+    if (links.some(item => item.sessionId === link.sessionId)) return
+    await this.writeJson(this.linksFile(), [...links, link])
+  }
+
+  /** 标记某会话已被归档（展示用时间戳，原生归档状态仍以 DSH 为准）。非 mutate。 */
+  private async markSessionLinkArchivedUnsafe(sessionId: string, archivedAt: string): Promise<void> {
+    const links = await this.listSessionLinks()
+    if (!links.some(item => item.sessionId === sessionId)) return
+    await this.writeJson(this.linksFile(), links.map(item => item.sessionId === sessionId ? { ...item, archivedAt } : item))
+  }
+
+  private async clearSessionLinkArchivedUnsafe(sessionId: string): Promise<void> {
+    const links = await this.listSessionLinks()
+    await this.writeJson(this.linksFile(), links.map(item => item.sessionId === sessionId ? { ...item, archivedAt: undefined } : item))
+  }
+
+  /**
+   * 从现有明确身份生成来源记录（幂等）：当前 sessionId、replacedSessionId、
+   * 以及 retained-sessions.json 中的 sessionId。不凭相同 cwd 猜测归属。
+   */
+  async migrateSessionLinks(): Promise<number> {
+    return this.mutate(async () => {
+      const existing = new Set((await this.listSessionLinks()).map(l => l.sessionId))
+      const links: NodeSessionLink[] = []
+      const now = new Date().toISOString()
+      for (const workspace of await this.listWorkspaces()) {
+        const nodes = (await this.readJson<AtlasNode[]>(this.nodesFile(workspace.id))) ?? []
+        for (const node of nodes) {
+          for (const sessionId of [node.sessionId, node.replacedSessionId]) {
+            if (!sessionId || existing.has(sessionId)) continue
+            existing.add(sessionId)
+            links.push({
+              sessionId,
+              originNodeId: node.id,
+              originWorkspaceId: workspace.id,
+              nodeTitleSnapshot: node.title,
+              archivedAt: node.sessionArchivedAt,
+              createdAt: now,
+            })
+          }
+        }
+      }
+      for (const retained of await this.readRetainedSessions()) {
+        if (!retained.sessionId || existing.has(retained.sessionId)) continue
+        existing.add(retained.sessionId)
+        links.push({
+          sessionId: retained.sessionId,
+          originNodeId: retained.id,
+          originWorkspaceId: retained.workspaceId,
+          nodeTitleSnapshot: retained.title,
+          createdAt: now,
+        })
+      }
+      if (links.length) await this.writeJson(this.linksFile(), [...(await this.listSessionLinks()), ...links])
+      return links.length
+    })
+  }
+
+  /** 供会话页等只读路径标记归档时间（独立 mutate，避免嵌套死锁）。 */
+  async markSessionLinkArchived(sessionId: string, archivedAt: string): Promise<void> {
+    return this.mutate(() => this.markSessionLinkArchivedUnsafe(sessionId, archivedAt))
   }
 
   private async writeJson(file: string, value: Json | unknown[] | unknown): Promise<void> {
@@ -621,4 +987,8 @@ function excerptAround(text: string, needle: string, radius = 48): string {
   const start = Math.max(0, at - radius)
   const end = Math.min(text.length, at + needle.length + radius)
   return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
+}
+
+function nodesToken(nodes: AtlasNode[]): string {
+  return createHash('sha256').update(JSON.stringify(nodes)).digest('hex')
 }

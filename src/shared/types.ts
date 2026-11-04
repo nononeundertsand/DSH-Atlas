@@ -39,6 +39,17 @@ export interface AtlasNode {
   mastery: number
   position: Point
   threadId: string
+  /** DSH 普通 Session 的绑定；旧 Atlas-native 节点没有此字段。 */
+  sessionId?: string
+  /** DSH 工作区分组身份，用于同步原生删除；与逻辑地图 ID 分开。 */
+  runtimeWorkspaceId?: string
+  /** 最近一次显式新建会话所替换的身份，供失败重试使用。 */
+  replacedSessionId?: string
+  /** 用户显式「归档会话」时记录；删除节点不再打此标记。恢复节点不清除，恢复归档会话时清除。 */
+  sessionArchivedAt?: string
+  deletedAt?: string
+  deletionBatchId?: string
+  deletionRootId?: string
   createdAt: string
   updatedAt: string
   closedAt?: string
@@ -49,6 +60,24 @@ export interface AtlasNode {
   lastDurationMs?: number
   /** 打开次数。 */
   openCount?: number
+}
+
+/**
+ * 节点的历史会话来源，按 Session ID 独立保存，不被新建会话覆盖。
+ * 这是「恢复旧 S1 但当前仍绑定 S2」所需的元数据，不是同时绑定多个当前会话。
+ */
+export interface NodeSessionLink {
+  sessionId: string
+  /** 来源节点 ID。 */
+  originNodeId: string
+  /** 来源地图 ID。 */
+  originWorkspaceId: string
+  /** 创建绑定时的节点标题快照。 */
+  nodeTitleSnapshot: string
+  /** 该会话最后被 Atlas 归档的时间（展示用；原生归档状态以 DSH 为准）。 */
+  archivedAt?: string
+  /** 首次记录时间。 */
+  createdAt: string
 }
 
 export interface Thread {
@@ -217,6 +246,7 @@ export type AtlasErrorCode =
   | 'E_MODEL'
   | 'E_BUDGET'
   | 'E_CONFLICT'
+  | 'E_SESSION_ARCHIVED'
   | 'E_NOT_FOUND'
   | 'E_UNSUPPORTED'
   | 'E_VALIDATION'
@@ -244,3 +274,35 @@ export type AtlasEvent =
   | { event: 'delta'; data: { messageId: string; text: string } }
   | { event: 'done'; data: { messageId: string; usage?: { input: number; output: number } } }
   | { event: 'error'; data: ApiError }
+
+export interface DeletePreview { nodes: AtlasNode[]; token: string }
+
+/** 回收站展示信息由当前地图和节点关系推导，不改写旧记录。 */
+export interface TrashNode extends AtlasNode { workspaceName: string; pathTitles: string[]; pathComplete: boolean }
+export type LibraryItem = Pick<TrashNode, 'id' | 'workspaceId' | 'workspaceName' | 'title' | 'sessionId' | 'deletedAt' | 'deletionBatchId' | 'deletionRootId' | 'sessionArchivedAt' | 'pathTitles' | 'pathComplete'> & { purgedAt?: string; /** DSH 真实会话标题，缺失时回退节点标题。 */ sessionTitle?: string }
+
+/**
+ * 会话页的一条记录：来自历史来源 + 当前绑定 + DSH 原生归档状态。
+ * 会话是否归档以 DSH 原生状态为准，不受节点 deletedAt 影响。
+ */
+export interface SessionRecord {
+  sessionId: string
+  /** 来源节点 ID（可能已删除或彻底删除）。 */
+  originNodeId: string
+  /** 来源地图 ID。 */
+  originWorkspaceId: string
+  /** 来源地图名称。 */
+  workspaceName?: string
+  /** 节点标题快照。 */
+  nodeTitle: string
+  /** 会话真实标题（缺失回退节点标题快照）。 */
+  title: string
+  /** 是否当前绑定到某个节点。 */
+  isCurrent: boolean
+  /** 当前绑定到的节点 ID（无则空）。 */
+  currentNodeId?: string
+  /** DSH 原生归档状态（事实来源）。 */
+  archived: boolean
+  /** Atlas 侧记录的时间（展示用）。 */
+  archivedAt?: string
+}

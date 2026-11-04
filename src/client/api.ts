@@ -2,9 +2,11 @@
  * 浏览器端的唯一网络出口。
  * 所有请求都走同源 /ext/atlas，不额外引入 RPC 框架。
  */
-import { ROUTES } from '../shared/protocol.js'
+import { ATLAS_BASE, ROUTES } from '../shared/protocol.js'
 import type {
   ApiError,
+  DeletePreview,
+  LibraryItem,
   AtlasNode,
   ClosureCard,
   CreateNodeInput,
@@ -12,6 +14,7 @@ import type {
   ExplainResult,
   MessageQuote,
   SearchHit,
+  SessionRecord,
   Thread,
   ThreadSnapshot,
   TurnInput,
@@ -67,8 +70,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+async function mutateNodes<T>(path: string, init: RequestInit): Promise<T> {
+  const result = await request<T>(path, init)
+  window.dispatchEvent(new Event('atlas:nodes-changed'))
+  return result
+}
+
 export const api = {
+  openSession: (nodeId: string) => request<{ node: AtlasNode }>(`${ROUTES.node(nodeId)}/session`, { method: 'POST' }),
+  sessionState: (nodeId: string) => request<{ node: AtlasNode; archivedSessionId?: string }>(`${ROUTES.node(nodeId)}/session-state`),
+  newSession: (nodeId: string, expectedSessionId: string) => mutateNodes<{ node: AtlasNode }>(`${ROUTES.node(nodeId)}/new-session`, { method: 'POST', body: JSON.stringify({ expectedSessionId }) }),
+  archiveSession: (nodeId: string, sessionId: string) => mutateNodes<{ node: AtlasNode }>(`${ROUTES.node(nodeId)}/archive-session`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
+  unarchiveSession: (sessionId: string) => mutateNodes<{ nodeId?: string; rebound: boolean }>(`${ATLAS_BASE}/unarchive-session`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
+  deletePreview: (id: string) => request<DeletePreview>(`${ROUTES.node(id)}/delete-preview`),
+  trash: () => request<{ version?: number; nodes: LibraryItem[]; sessions: SessionRecord[] }>('/ext/atlas/trash'),
+  purgeNodes: (targets: Array<{ id: string; batchId: string }>) => mutateNodes<{ purged: string[] }>('/ext/atlas/trash/purge', { method: 'POST', body: JSON.stringify({ targets }) }),
+  archiveSessions: (sessionIds: string[]) => mutateNodes<{ archived: string[] }>('/ext/atlas/trash/sessions', { method: 'POST', body: JSON.stringify({ sessionIds }) }),
+  restoreNode: (id: string) => mutateNodes<{ restored: string[] }>(`${ROUTES.node(id)}/restore`, { method: 'POST' }),
+  purgeNode: (id: string, batchId: string) => mutateNodes<{ purged: string[] }>(`${ROUTES.node(id)}/purge`, { method: 'POST', body: JSON.stringify({ batchId }) }),
+  retainedSession: (id: string) => request<{ sessionId: string }>(`${ROUTES.node(id)}/retained-session`, { method: 'POST' }),
   bootstrap: () => request<BootstrapPayload>(ROUTES.bootstrap),
+  getWorkspace: (id: string) => request<{ snapshot: WorkspaceSnapshot }>(ROUTES.workspace(id)),
 
   checkUpdate: () => request<UpdateInfo>(ROUTES.update),
 
@@ -102,8 +124,8 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteNode: (nodeId: string) =>
-    request<{ deleted: string[] }>(ROUTES.node(nodeId), { method: 'DELETE' }),
+  deleteNode: (nodeId: string, token: string) =>
+    mutateNodes<{ deleted: string[] }>(ROUTES.node(nodeId), { method: 'DELETE', body: JSON.stringify({ token }) }),
 
   closeNode: (nodeId: string, threadId?: string) =>
     request<{ card: ClosureCard; node: AtlasNode }>(ROUTES.closeNode(nodeId), {
