@@ -6,6 +6,7 @@
  * - sidebar.panellist / id=atlas：侧边栏的 Atlas 图标（由 DSH 负责选中逻辑）。
  */
 import type { ClientContext } from '../shared/dsh.js'
+import { SelectionChat, SELECTION_CHAT_CSS } from './SelectionChat.js'
 import { AtlasApp } from './AtlasApp.js'
 import { ATLAS_CSS } from './styles.js'
 import { NodeLibrary } from './NodeLibrary.js'
@@ -16,7 +17,7 @@ import type { AtlasNode } from '../shared/types.js'
 
 const PANEL_ID = 'atlas'
 
-export const inject = ['slots', 'layout', 'uiWorkspace', 'sessions']
+export const inject = ['slots', 'layout', 'uiWorkspace', 'sessions', 'workspaces']
 
 export function apply(ctx: ClientContext): void {
   const showLibrary = (tab: 'retained' | 'trash') => ctx.layout.selectPanel(`atlas-${tab}`)
@@ -78,10 +79,12 @@ export function apply(ctx: ClientContext): void {
     if (existing) return
     const style = document.createElement('style')
     style.dataset.dshAtlas = 'true'
-    style.textContent = ATLAS_CSS
+    style.textContent = ATLAS_CSS + SELECTION_CHAT_CSS
     document.head.append(style)
     return () => style.remove()
   }, 'dsh-atlas: styles')
+
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'atlas-selection-chat', inject: () => ({ ctx }) }, SelectionChat))
 
   ctx.slots.inject('main', () => {
     const dispose = ctx.slots.register(
