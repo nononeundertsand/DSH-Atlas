@@ -1,3 +1,5 @@
+import type { SessionEvent } from './selection-chat.js'
+
 /**
  * DSH 适配边界：只保留 Atlas 实际用到的能力，并把名字固定在这里。
  *
@@ -53,8 +55,15 @@ export interface DefaultModelPort {
   currentSelection(): ModelSelection
 }
 
+/** 新版 DSH sessionQuery.observeSession() 返回的观察租约，用完必须 [Symbol.dispose]() 释放。 */
+export interface SessionObservation {
+  readonly header: { id: string }
+  [Symbol.dispose](): void
+}
+
 export interface HostContext {
   agents?: { get(id: string): { status: string } | undefined }
+  on?(event: 'agent/created', listener: (payload: { agent: { id: string; ctx: { tools?: { restrict(filter: { allow: string[] }): unknown; guard(check: () => string): unknown } } } }) => void): () => void
   workspaceRegistry?: {
     create(path: string, title?: string): Promise<{ id: string; attachSession(id: string): Promise<void> }>
     list?(): Array<{ id: string; path: string; sessionIds: string[] }>
@@ -64,18 +73,23 @@ export interface HostContext {
     readonly archivedSessionIds?: string[]
   }
   sessionController?: {
-    create(input: { sessionId: string; workspaceId: string }): Promise<{ sessionId: string }>
-    inspect(id: string): Promise<unknown>
+    create(input: { sessionId: string; workspaceId?: string; cwd?: string; agentPreset?: string }): Promise<{ sessionId: string }>
+    /** 旧版 DSH 的会话检查；0.2.2-rc.1 已移除。 */
+    inspect?(id: string): Promise<unknown>
   }
-  /** DSH 会话标题查询；读真实 session/title 事件，缺失时回退节点标题。 */
+  /** DSH 会话查询：读真实 session/title 事件，缺失时回退节点标题。 */
   sessionQuery?: {
-    readTitleSnapshots(ids: string[]): Promise<Record<string, string | null>>
+    readSurface?(id: string): Promise<{ session: { id: string; cwd?: string }; events: import('./selection-chat.js').SessionEvent[] }>
+    /** 新版 DSH：取代 controller.inspect 的定点会话检查。 */
+    observeSession?(sessionId: string, options: { projectionMode: 'none' | 'all'; signal?: AbortSignal }): Promise<SessionObservation>
+    /** 旧版返回 Session ID → 标题映射；新版返回逐会话 fulfilled/rejected 结果列表。 */
+    readTitleSnapshots(ids: string[]): Promise<unknown>
   }
   webServer: WebServerPort
   llm?: LlmPort
   /** DSH 的默认模型选择；通过 inject 声明后可直接读取。 */
   agentDefaultModel?: DefaultModelPort
-  effect(fn: () => void | (() => void), label?: string): void
+  effect(fn: () => void | (() => void | Promise<void>), label?: string): void
 }
 
 /** 浏览器端最小端口，避免把整棵 DSH 客户端类型带进产物。 */
@@ -95,9 +109,27 @@ export interface SlotRegistryPort {
 }
 
 export interface ClientContext {
-  sessions: { refresh(): Promise<void> }
+  sessions: SelectionClientPort
+  workspaces: { list: { getSnapshot(): { archivedSessionIds: string[] }; subscribe(listener: () => void): () => void } }
   uiWorkspace: { openSession(sessionId: string): void }
   slots: SlotRegistryPort
   layout: { selectPanel(id: string | null): void }
-  effect(fn: () => void | (() => void), label?: string): void
+  effect(fn: () => void | (() => void | Promise<void>), label?: string): void
+}
+
+export interface NativeSnapshot { running: boolean; removed: boolean; openState: string; openError: { message: string } | null; lastAgentError: string | null }
+export interface NativeSession {
+  getSnapshot(): NativeSnapshot
+  subscribe(listener: () => void): () => void
+  prompt(content: Array<{ type: 'text'; text: string }>, mode: 'queue', signal?: AbortSignal, requestId?: string): Promise<{ ok: boolean; error?: { message: string } }>
+  cancel(): Promise<{ ok: boolean; error?: { message: string } }>
+  resync(): Promise<void>
+}
+export interface NativeBinding {
+  session: NativeSession
+  eventSource: { getSnapshot(): { entries: Array<{ event: SessionEvent }> }; subscribe(listener: () => void): () => void }
+}
+export interface NativeReference { ready: Promise<NativeBinding>; release(): void }
+export interface SelectionClientPort {
+  refresh(): Promise<void>
 }

@@ -29,6 +29,7 @@ import type {
 import { ATLAS_BASE, LIMITS } from '../shared/protocol.js'
 import type { NodeSessions } from './sessions.js'
 import type { HostContext } from '../shared/dsh.js'
+import { readTitleMap } from './dsh-compat.js'
 
 interface RequestLike {
   method?: string
@@ -47,6 +48,7 @@ interface ResponseLike {
 }
 
 export interface RouterDeps {
+  selectionSessions?: import('./selection-chat.js').SelectionSessions
   isSessionRunning?: (id: string) => boolean
   nodeSessions?: NodeSessions
   sessionQuery?: HostContext['sessionQuery']
@@ -77,6 +79,57 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
   }
   const path = segments.slice(2)
   const method = (req.method ?? 'GET').toUpperCase()
+  if (path[0] === 'selection-chat') {
+    const memory = deps.selectionSessions
+    if (!memory) throw new Error('E_UNSUPPORTED: 临时 Session 服务不可用')
+    if (path.length === 1) {
+      allow(method, ['POST'])
+      const body = await readJson<{ pageId: string; conversationId: string; source: import('../shared/selection-chat.js').SelectionSource }>(req)
+      return send(res, 200, await memory.open(body.pageId, body.conversationId, body.source))
+    }
+    if (path.length === 2 && path[1] === 'close') {
+      allow(method, ['POST'])
+      const body = await readJson<{ pageId: string; conversationId: string }>(req)
+      await memory.close(body.pageId, body.conversationId)
+      return send(res, 200, { closed: true })
+    }
+    if (path.length === 3 && path[2] === 'events') {
+      allow(method, ['GET'])
+      const id = path[1]!
+      const initial = memory.state(id)
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
+      res.flushHeaders?.()
+      let closed = false
+      const publish = () => {
+        if (closed) return
+        try { res.write(`data: ${JSON.stringify(memory.state(id))}\n\n`) }
+        catch { res.write(`data: ${JSON.stringify({ closed: true, error: '一次性会话已清空，请重新搜索' })}\n\n`); res.end(); cleanup() }
+      }
+      const off = memory.subscribe(id, publish)
+      const heartbeat = setInterval(() => { if (!closed) res.write(': keepalive\n\n') }, 15000)
+      const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); off() }
+      res.on('close', cleanup)
+      res.write(`data: ${JSON.stringify(initial)}\n\n`)
+      return
+    }
+    if (path.length === 3 && path[2] === 'turn') {
+      allow(method, ['POST'])
+      const body = await readJson<{ text: string; requestId: string }>(req)
+      await memory.send(path[1]!, body.text, body.requestId)
+      return send(res, 200, { accepted: true })
+    }
+    if (path.length === 3 && path[2] === 'stop') {
+      allow(method, ['POST'])
+      memory.stop(path[1]!)
+      return send(res, 200, { stopped: true })
+    }
+    if (path.length === 2) {
+      allow(method, ['GET'])
+      await memory.available(path[1]!)
+      return send(res, 200, { available: true })
+    }
+    throw new Error('E_BAD_REQUEST: 临时会话路径无效')
+  }
   if (path.length === 1 && path[0] === 'trash') {
     allow(method, ['GET'])
     await deps.store.migrateSessionLinks().catch(() => undefined)
@@ -84,8 +137,7 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     const nodes = (await deps.store.deletedNodes(true)).map(n => n.sessionId && archived.has(n.sessionId) && !n.sessionArchivedAt ? { ...n, sessionId: undefined } : n)
     const sessionIds = [...new Set(nodes.map(n => n.sessionId).filter((id): id is string => !!id))]
     if (sessionIds.length && deps.sessionQuery) {
-      let titles: Record<string, string | null> = {}
-      try { titles = await deps.sessionQuery.readTitleSnapshots(sessionIds) } catch { /* 冷会话或服务不可用时回退节点标题 */ }
+      const titles = await readTitleMap(deps.sessionQuery, sessionIds)
       for (const node of nodes) {
         const title = node.sessionId ? titles[node.sessionId] : undefined
         if (title) node.sessionTitle = title
@@ -93,9 +145,7 @@ async function route(req: RequestLike, res: ResponseLike, deps: RouterDeps): Pro
     }
     const sessions = await deps.store.listSessions(archived)
     if (deps.sessionQuery && sessions.length) {
-      const ids = sessions.map(s => s.sessionId)
-      let titles: Record<string, string | null> = {}
-      try { titles = await deps.sessionQuery.readTitleSnapshots(ids) } catch { /* 回退节点标题快照 */ }
+      const titles = await readTitleMap(deps.sessionQuery, sessions.map(s => s.sessionId))
       for (const s of sessions) {
         const t = titles[s.sessionId]
         if (t) s.title = t
