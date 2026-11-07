@@ -55,6 +55,12 @@ export interface DefaultModelPort {
   currentSelection(): ModelSelection
 }
 
+/** 新版 DSH sessionQuery.observeSession() 返回的观察租约，用完必须 [Symbol.dispose]() 释放。 */
+export interface SessionObservation {
+  readonly header: { id: string }
+  [Symbol.dispose](): void
+}
+
 export interface HostContext {
   agents?: { get(id: string): { status: string } | undefined }
   on?(event: 'agent/created', listener: (payload: { agent: { id: string; ctx: { tools?: { restrict(filter: { allow: string[] }): unknown; guard(check: () => string): unknown } } } }) => void): () => void
@@ -68,12 +74,16 @@ export interface HostContext {
   }
   sessionController?: {
     create(input: { sessionId: string; workspaceId?: string; cwd?: string; agentPreset?: string }): Promise<{ sessionId: string }>
-    inspect(id: string): Promise<unknown>
+    /** 旧版 DSH 的会话检查；0.2.2-rc.1 已移除。 */
+    inspect?(id: string): Promise<unknown>
   }
-  /** DSH 会话标题查询；读真实 session/title 事件，缺失时回退节点标题。 */
+  /** DSH 会话查询：读真实 session/title 事件，缺失时回退节点标题。 */
   sessionQuery?: {
     readSurface?(id: string): Promise<{ session: { id: string; cwd?: string }; events: import('./selection-chat.js').SessionEvent[] }>
-    readTitleSnapshots(ids: string[]): Promise<Record<string, string | null>>
+    /** 新版 DSH：取代 controller.inspect 的定点会话检查。 */
+    observeSession?(sessionId: string, options: { projectionMode: 'none' | 'all'; signal?: AbortSignal }): Promise<SessionObservation>
+    /** 旧版返回 Session ID → 标题映射；新版返回逐会话 fulfilled/rejected 结果列表。 */
+    readTitleSnapshots(ids: string[]): Promise<unknown>
   }
   webServer: WebServerPort
   llm?: LlmPort

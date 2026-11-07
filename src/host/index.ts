@@ -46,7 +46,7 @@ export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
     dataDir: store.location,
     modelHint: config.model ?? 'auto',
     checkUpdate: (force) => updates.check(force),
-    nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry),
+    nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry, ctx.sessionQuery),
     sessionQuery: ctx.sessionQuery,
     isSessionRunning: id => ctx.agents?.get(id)?.status === 'running',
   })
