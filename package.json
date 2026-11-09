@@ -37,10 +37,11 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "smoke": "node tests/smoke.mjs",
-    "check": "npm run typecheck && npm run build && npm run smoke && node tests/session-routing.mjs && node tests/node-trash.mjs && node tests/selection-chat.mjs && node tests/selection-memory.mjs && node tests/dsh-compat.mjs",
+    "check": "npm run typecheck && npm run build && npm run smoke && node tests/session-routing.mjs && node tests/node-trash.mjs && node tests/selection-chat.mjs && node tests/selection-memory.mjs && node tests/selection-native.mjs && node tests/dsh-compat.mjs",
     "release:patch": "npm version patch --no-git-tag-version && npm run check",
     "dev": "node scripts/build.mjs --watch",
-    "test:dsh": "node tests/dsh-fixture/session.mjs && node tests/dsh-fixture/selection-policy.mjs"
+    "test:dsh": "node tests/dsh-fixture/session.mjs && node tests/dsh-fixture/selection-policy.mjs",
+    "test:native": "node tests/native-runtime.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",

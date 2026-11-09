@@ -15,6 +15,24 @@ export class SelectionMemoryRuntime {
   private closed = false
   constructor(private readonly llm: LlmPort, private readonly selection: () => ModelSelection) {}
 
+  /**
+   * 0.2.2-rc.1 splits tool execution into a scoped provider: `tools.setExecutor`
+   * exists but `selectExecutor` throws even when the visible tool list is empty.
+   * Legacy ToolRuntime owns its executor and has no `setExecutor`, so the module
+   * is imported dynamically only on the new host.
+   */
+  private async configureExecutor(ctx: Context): Promise<void> {
+    const tools = ctx.tools as unknown as { setExecutor?: (executor: unknown) => unknown } | undefined
+    if (typeof tools?.setExecutor !== 'function') return
+    const specifier = '@deepseek-ai/dsh-tool-executor-native'
+    try {
+      await ctx.plugin(await import(specifier))
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`E_UNSUPPORTED: 临时会话工具执行器初始化失败：${reason}。需要 DSH 自带的 ${specifier}；这是配置问题，重试临时搜索不会恢复。`)
+    }
+  }
+
   private initialize(): Promise<Context> {
     if (this.closed) return Promise.reject(new Error('E_SESSION_UNAVAILABLE: 临时会话运行域已关闭'))
     return this.ready ??= (async () => {
@@ -23,6 +41,7 @@ export class SelectionMemoryRuntime {
         // Borrow only the host model service, never its Session/Agent registries.
         ctx.provide('llm', this.llm as LlmRuntime)
         for (const plugin of [SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) await ctx.plugin(plugin)
+        await this.configureExecutor(ctx)
         await ctx.plugin(AgentLoop, { agents: [] })
         if (this.closed) throw new Error('E_SESSION_UNAVAILABLE: 临时会话运行域已关闭')
         return ctx

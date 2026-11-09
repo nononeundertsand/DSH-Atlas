@@ -28,7 +28,7 @@ export function captureSelection(selection: Selection | null): CapturedSelection
     if (range.intersectsNode(el)) return
   }
   const text = range.toString().trim()
-  if ([...text].length < 2 || [...text].length > 200) return
+  if (!text || [...text].length > 200) return
   const prefix = range.cloneRange()
   prefix.selectNodeContents(message)
   prefix.setEnd(range.startContainer, range.startOffset)

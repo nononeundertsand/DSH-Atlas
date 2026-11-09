@@ -4,6 +4,7 @@ import { sourceKey, type TemporarySession } from '../shared/selection-chat.js'
 import { listenSelections, visibleSession, type CapturedSelection } from './selection-capture.js'
 import { chatRows, connectMemorySession, lastTurnError, selectionRequest } from './selection-sessions.js'
 import { Markdown } from './markdown.js'
+import { setNativeSearchHandler, subscribeNativeSelection } from './native-selection.js'
 
 interface Conversation {
   selection: CapturedSelection
@@ -23,7 +24,10 @@ interface Conversation {
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error)
 
-export function SelectionChat({ ctx }: { ctx: ClientContext }) {
+export function SelectionChat({ ctx, nativeMode = () => false }: { ctx: ClientContext; nativeMode?: () => boolean }) {
+  // The native slot is declared after this overlay mounts; subscribe so the two
+  // entries can never be enabled at the same time.
+  const nativeActive = useSyncExternalStore(subscribeNativeSelection, nativeMode)
   const workspaceState = useSyncExternalStore(listener => ctx.workspaces.list.subscribe(listener), () => ctx.workspaces.list.getSnapshot())
   const [pageId] = useState(() => crypto.randomUUID())
   const activeRef = useRef<Conversation>()
@@ -83,17 +87,25 @@ export function SelectionChat({ ctx }: { ctx: ClientContext }) {
     setActive(conversation)
     void ensure(conversation)
   }
+  const nativeSearch = useRef<(selection: CapturedSelection) => void>(() => {})
+  nativeSearch.current = searchSelection
+
+  useEffect(() => {
+    if (!nativeActive) return
+    setNativeSearchHandler(selection => nativeSearch.current(selection))
+    return () => setNativeSearchHandler(undefined)
+  }, [nativeActive])
 
   useEffect(() => {
     alive.current = true
-    const stop = listenSelections(setCandidate, () => { setCandidate(undefined); closeCurrent() })
+    const stop = listenSelections(nativeActive ? () => {} : setCandidate, () => { setCandidate(undefined); closeCurrent() })
     const unload = () => { setCandidate(undefined); closeCurrent() }
     window.addEventListener('pagehide', unload)
     return () => {
       alive.current = false; stop(); window.removeEventListener('pagehide', unload)
       release(activeRef.current); activeRef.current = undefined
     }
-  }, [closeCurrent, release])
+  }, [closeCurrent, release, nativeActive])
 
   useEffect(() => {
     setConnection(undefined)
@@ -142,7 +154,7 @@ export function SelectionChat({ ctx }: { ctx: ClientContext }) {
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 180) el.scrollTop = el.scrollHeight
   }, [rows.at(-1)?.text, active])
 
-  const selectionAction = candidate && <SelectionSearch selection={candidate} onSearch={() => searchSelection(candidate)} onDismiss={dismissCandidate} />
+  const selectionAction = !nativeActive && candidate && <SelectionSearch selection={candidate} onSearch={() => searchSelection(candidate)} onDismiss={dismissCandidate} />
   if (!active) return selectionAction
   const conversation = active
   const width = Math.min(active.expanded ? 880 : 500, viewport.width - 16)
@@ -151,6 +163,8 @@ export function SelectionChat({ ctx }: { ctx: ClientContext }) {
   const y = Math.max(8, Math.min(active.y, viewport.height - height - 8))
   const unavailable = snapshot?.removed || conversation.error?.includes('归档') || workspaceState.archivedSessionIds.includes(conversation.selection.source.sessionId)
   const error = conversation.error ?? snapshot?.openError?.message ?? snapshot?.lastAgentError ?? (binding && !running ? lastTurnError(binding.eventSource.getSnapshot().entries) : undefined)
+  // An unloadable executor is a deployment/config fault: retrying cannot fix it.
+  const fatal = !!error && /工具执行器初始化失败/.test(error)
 
   async function send(retryPending = false) {
     if (!binding || conversation.sending || snapshot?.running || unavailable) return
@@ -172,6 +186,7 @@ export function SelectionChat({ ctx }: { ctx: ClientContext }) {
   }
 
   async function retry() {
+    if (fatal) return
     if (!conversation.temporary) { await ensure(conversation); return }
     conversation.error = undefined
     if (conversation.pendingSend) { await send(true); return }
@@ -215,14 +230,14 @@ export function SelectionChat({ ctx }: { ctx: ClientContext }) {
       {running && <p role="status">正在回答…</p>}
       {!running && binding && active.initialSent && !rows.some(row => row.role === 'assistant') && !error && <p role="status">尚无文字回复。可以继续提问，或重试连接。</p>}
       {unavailable && <p role="alert">来源会话不可用，或本次会话已清空。临时内容不会保存。</p>}
-      {error && <p role="alert">{error} <button disabled={!!running} onClick={() => void retry()}>重试</button></p>}
-      {snapshot?.openState === 'error' && !error && <button onClick={() => void retry()}>重新连接</button>}
+      {error && <p role="alert">{error} {!fatal && <button disabled={!!running} onClick={() => void retry()}>重试</button>}</p>}
+      {!fatal && snapshot?.openState === 'error' && !error && <button onClick={() => void retry()}>重新连接</button>}
     </div>
     <form onSubmit={event => { event.preventDefault(); void send() }}>
       <textarea aria-label="临时会话追问" placeholder={`围绕「${active.selection.source.text}」继续追问…`} value={active.draft} onChange={event => { active.draft = event.target.value; repaint() }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
       {running ? <button type="button" aria-label="停止临时回复" disabled={!binding || !snapshot?.running} onClick={() => void binding?.session.cancel().then(result => { if (!result.ok) throw new Error(result.error?.message); }).catch(error => { active.error = messageOf(error); notify() })}>■</button> : <button type="submit" aria-label="发送临时追问" disabled={!binding || !active.initialSent || !!unavailable || !active.draft.trim()}>↑</button>}
     </form>
-    <footer>仅本次使用 · 关闭即清空 <button type="button" onClick={() => void retry()}>重新连接</button></footer>
+    <footer>仅本次使用 · 关闭即清空 {!fatal && <button type="button" onClick={() => void retry()}>重新连接</button>}</footer>
   </section></>
 }
 

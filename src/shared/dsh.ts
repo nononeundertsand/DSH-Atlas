@@ -100,12 +100,22 @@ export interface SlotOptions {
   id?: string
   order?: number
   label?: string | (() => string)
+  /** Namespace for the injected `t` of a registered cell. */
+  locale?: string
   inject?: (...args: never[]) => Record<string, unknown>
 }
 
+/** Raw slot cell; `entries` keeps every registration, unlike `entriesOfSlot`. */
+export interface StoredSlotEntry {
+  component?: unknown
+  options: { key?: string; priority?: number; locale?: string; registrant?: string }
+}
+
 export interface SlotRegistryPort {
-  inject(name: string, register: () => void): void
+  inject(name: string, register: () => void | (() => void)): void | (() => void)
   register(options: SlotOptions, component: unknown): () => void
+  /** New DSH: raw cells (keeps lower-priority same-key registrations). */
+  entries?(name: string): readonly StoredSlotEntry[]
 }
 
 export interface ClientContext {
@@ -114,6 +124,8 @@ export interface ClientContext {
   uiWorkspace: { openSession(sessionId: string): void }
   slots: SlotRegistryPort
   layout: { selectPanel(id: string | null): void }
+  /** Read a service without the plugin-level `inject` requirement (legacy hosts lack it). */
+  get?(name: string): unknown
   effect(fn: () => void | (() => void | Promise<void>), label?: string): void
 }
 

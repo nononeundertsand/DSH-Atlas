@@ -13,6 +13,7 @@ import { NodeLibrary } from './NodeLibrary.js'
 import { SessionTree } from './SessionTree.js'
 import { api, ApiErr } from './api.js'
 import { SessionUnavailable } from './SessionUnavailable.js'
+import { registerNativeSelection, nativeSelectionActive, NATIVE_SELECTION_CSS } from './native-selection.js'
 import type { AtlasNode } from '../shared/types.js'
 
 const PANEL_ID = 'atlas'
@@ -79,12 +80,13 @@ export function apply(ctx: ClientContext): void {
     if (existing) return
     const style = document.createElement('style')
     style.dataset.dshAtlas = 'true'
-    style.textContent = ATLAS_CSS + SELECTION_CHAT_CSS
+    style.textContent = ATLAS_CSS + SELECTION_CHAT_CSS + NATIVE_SELECTION_CSS
     document.head.append(style)
     return () => style.remove()
   }, 'dsh-atlas: styles')
 
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'atlas-selection-chat', inject: () => ({ ctx }) }, SelectionChat))
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'atlas-selection-chat', inject: () => ({ ctx, nativeMode: nativeSelectionActive }) }, SelectionChat))
+  registerNativeSelection(ctx)
 
   ctx.slots.inject('main', () => {
     const dispose = ctx.slots.register(
