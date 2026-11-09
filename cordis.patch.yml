@@ -3,3 +3,15 @@
 - insert:
     - id: atlas
       name: dsh-atlas
+    # Compatibility for previously stored Sessions; new searches use a private RAM runtime.
+    - id: atlas-selection-text-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: atlas-selection-text
+        name: 旧版划词会话（历史恢复）
+        description: 仅用于恢复已有旧版日志，新搜索不使用此预设
+        plugins:
+          - id: text-tool-presentation
+            name: '@deepseek-ai/dsh-agent-tool-presentation'
+            config:
+              mode: native

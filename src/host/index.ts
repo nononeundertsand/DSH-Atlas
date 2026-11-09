@@ -11,6 +11,8 @@ import { AtlasStore } from './store.js'
 import { AtlasModel } from './model.js'
 import { createAtlasRouter } from './routes.js'
 import { UpdateChecker } from './update.js'
+import { SelectionSessions, restrictTemporaryAgent } from './selection-chat.js'
+import { SelectionMemoryRuntime } from './selection-memory.js'
 import { NodeSessions } from './sessions.js'
 
 export interface AtlasConfig {
@@ -34,13 +36,17 @@ export function apply(ctx: HostContext, config: AtlasConfig = {}): void {
   const store = new AtlasStore(config.dataDir)
   const model = new AtlasModel(ctx.llm, config, () => ctx.agentDefaultModel?.currentSelection())
   const updates = new UpdateChecker(config)
+  const selectionSessions = new SelectionSessions(ctx, new SelectionMemoryRuntime(ctx.llm!, () => ctx.agentDefaultModel!.currentSelection()))
+  ctx.effect(() => () => selectionSessions.dispose(), 'dsh-atlas: private memory Sessions')
+  if (ctx.on) ctx.on('agent/created', ({ agent }) => restrictTemporaryAgent(agent))
   const router = createAtlasRouter({
     store,
     model,
+    selectionSessions,
     dataDir: store.location,
     modelHint: config.model ?? 'auto',
     checkUpdate: (force) => updates.check(force),
-    nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry),
+    nodeSessions: new NodeSessions(store, ctx.sessionController, ctx.workspaceRegistry, ctx.sessionQuery),
     sessionQuery: ctx.sessionQuery,
     isSessionRunning: id => ctx.agents?.get(id)?.status === 'running',
   })

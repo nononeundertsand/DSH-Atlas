@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path'
 import type { HostContext } from '../shared/dsh.js'
 import type { AtlasNode } from '../shared/types.js'
 import type { AtlasStore } from './store.js'
+import { sessionChecker } from './dsh-compat.js'
+import type { SessionChecker } from './dsh-compat.js'
 
 /** 使用原生 controller 保留普通 Session 的 preset 和恢复语义。 */
 export class NodeSessions {
@@ -45,7 +47,12 @@ export class NodeSessions {
     })
   }
 
-  constructor(private readonly store: AtlasStore, private readonly controller: HostContext['sessionController'], private readonly workspaces: HostContext['workspaceRegistry']) {}
+  constructor(
+    private readonly store: AtlasStore,
+    private readonly controller: HostContext['sessionController'],
+    private readonly workspaces: HostContext['workspaceRegistry'],
+    private readonly sessionQuery?: HostContext['sessionQuery'],
+  ) {}
 
   reconcileWorkspaces(): Promise<void> {
     if (!this.workspaces?.list || !this.controller) return Promise.resolve()
@@ -64,10 +71,15 @@ export class NodeSessions {
     // 分组状态由读取快照时按需展示，此处不再写节点。
   }
 
+  /** 能力检查只影响节点打开，不在插件加载时执行，避免能力缺失拖垮整个插件。 */
+  private checker(): SessionChecker {
+    return sessionChecker({ sessionQuery: this.sessionQuery, sessionController: this.controller })
+  }
+
   open(nodeId: string): Promise<AtlasNode> {
     const existing = this.pending.get(nodeId)
     if (existing) return existing
-    const task = this.createOrOpen(nodeId).finally(() => this.pending.delete(nodeId))
+    const task = (async () => this.createOrOpen(nodeId, this.checker()))().finally(() => this.pending.delete(nodeId))
     this.pending.set(nodeId, task)
     return task
   }
@@ -75,11 +87,12 @@ export class NodeSessions {
   startNew(nodeId: string, expectedSessionId: string): Promise<AtlasNode> {
     if (this.isOpening(nodeId)) return Promise.reject(new Error('E_CONFLICT: 会话正在打开，请稍后重试'))
     const task = (async () => {
+      const check = this.checker() // 先于 replaceSession 的绑定变更
       const current = await this.store.getNode(nodeId)
       const archivedSource = !current.sessionId && current.sessionArchivedAt && (await this.store.listSessionLinks()).some(link => link.sessionId === expectedSessionId && link.originNodeId === nodeId)
       if (!this.archivedSessionIds.includes(expectedSessionId) && !(current.sessionId === expectedSessionId && current.sessionArchivedAt) && !archivedSource && current.replacedSessionId !== expectedSessionId) throw new Error('E_CONFLICT: 原会话尚未归档，不能替换')
       await this.store.replaceSession(nodeId, expectedSessionId)
-      return this.createOrOpen(nodeId)
+      return this.createOrOpen(nodeId, check)
     })().finally(() => this.pending.delete(nodeId))
     this.pending.set(nodeId, task)
     return task
@@ -155,22 +168,19 @@ export class NodeSessions {
     return result
   }
 
-  private async createOrOpen(nodeId: string): Promise<AtlasNode> {
+  private async createOrOpen(nodeId: string, check: SessionChecker): Promise<AtlasNode> {
     const { node, archivedSessionId } = await this.sessionState(nodeId)
     if (!this.controller || !this.workspaces) throw new Error('E_UNSUPPORTED: DSH Session 服务不可用')
     if (archivedSessionId) throw new Error('E_SESSION_ARCHIVED: 当前没有可用会话，请恢复归档会话或创建新会话')
+    // 真实查询在任何副作用之前完成：其他错误原样上抛，不得误判为不存在、覆盖绑定或换 Session ID。
+    const exists = node.sessionId ? (await check(node.sessionId)) === 'exists' : false
     await mkdir(join(this.store.location, 'session-workspaces', node.id), { recursive: true })
     const workspace = await this.workspaces.create(join(this.store.location, 'session-workspaces', node.id), node.title)
-    if (node.sessionId) {
-      try {
-        await this.controller.inspect(node.sessionId)
-        await workspace.attachSession(node.sessionId)
-        return this.store.bindSession(node.id, node.sessionId, workspace.id)
-      } catch (error) {
-        if (!(error instanceof Error) || error.constructor.name !== 'ApiSessionNotFound') throw error
-        // 空白 Session 可能尚未形成持久日志；只重建同一确定身份。
-      }
+    if (exists && node.sessionId) {
+      await workspace.attachSession(node.sessionId)
+      return this.store.bindSession(node.id, node.sessionId, workspace.id)
     }
+    // 只有明确的「会话不存在」才到这里：空白 Session 沿用原确定身份重建。
     // 固定 ID 允许创建成功、绑定写入失败后重试空白 Session。
     const sessionId = node.sessionId ?? `atlas-${node.id}`
     const result = await this.controller.create({
