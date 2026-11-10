@@ -49,7 +49,7 @@ export class SelectionSessions {
   constructor(private readonly ctx: HostContext, private readonly memory: MemoryRuntime) {}
 
   open(pageId: string, conversationId: string, source: SelectionSource): Promise<TemporarySession> {
-    if (!uuid(pageId) || !uuid(conversationId) || !source || typeof source.sessionId !== 'string' || !source.sessionId || source.sessionId.length > 200 || typeof source.messageKey !== 'string' || source.messageKey.length > 500 || typeof source.text !== 'string' || [...source.text.trim()].length < 2 || [...source.text].length > 200 || typeof source.paragraph !== 'string' || source.paragraph.length > 1200 || !Number.isSafeInteger(source.start) || !Number.isSafeInteger(source.end) || source.start < 0 || source.end <= source.start) return Promise.reject(new Error('E_BAD_REQUEST: 选区无效'))
+    if (!uuid(pageId) || !uuid(conversationId) || !source || typeof source.sessionId !== 'string' || !source.sessionId || source.sessionId.length > 200 || typeof source.messageKey !== 'string' || source.messageKey.length > 500 || typeof source.text !== 'string' || !source.text.trim() || [...source.text].length > 200 || typeof source.paragraph !== 'string' || source.paragraph.length > 1200 || !Number.isSafeInteger(source.start) || !Number.isSafeInteger(source.end) || source.start < 0 || source.end <= source.start) return Promise.reject(new Error('E_BAD_REQUEST: 选区无效'))
     const id = this.identity(pageId, conversationId)
     if (this.disposed || this.closed.has(id)) return Promise.reject(new Error('E_SESSION_UNAVAILABLE: 一次性会话已清空，请重新搜索'))
     const key = sourceKey(source)

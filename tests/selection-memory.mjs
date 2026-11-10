@@ -48,7 +48,7 @@ async function settled(id) {
   }
   throw new Error('memory turn did not settle')
 }
-const source = { sessionId: 'main', messageKey: 'm1', text: '页分裂', start: 3, end: 6, paragraph: '通过页分裂腾出空间。' }
+const source = { sessionId: 'main', messageKey: 'm1', text: '页', start: 2, end: 3, paragraph: '通过页分裂腾出空间。' }
 const page = '01010101-0101-0101-0101-010101010101'
 const id1 = '02020202-0202-0202-0202-020202020202'
 const id2 = '03030303-0303-0303-0303-030303030303'
@@ -74,6 +74,7 @@ try {
   await settled(id)
   assert.ok(updates > 3, 'native transient frames reach subscribers')
   assert.equal(calls.length, 1)
+  assert.ok(calls[0].messages.some(message => message.content.some(block => block.type === 'text' && block.text.includes('"selectedText":"页"'))), 'the first explanation receives the single selected character')
   assert.deepEqual(calls[0].tools ?? [], [])
   assert.equal(handles[0].agent.ctx.get('sessionPersistence'), undefined)
   assert.equal(root.sessions.list().length, 0, 'private native Session never enters the root catalog')
